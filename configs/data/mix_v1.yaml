@@ -1,0 +1,15 @@
+# EXAMPLE mix: enough to run the pipeline end to end. The mix behind the released model is private
+# (private/configs/data/mix_v1.yaml overrides this file; see src/code_embed_v3/paths.py).
+# Every source here is zero-shot: none shares provenance with an MTEB(Code)/CoIR/CoREB task.
+output_dir: data/mix_v1
+seed: 42
+dev_rows: 500
+sources:
+  - {name: cornstack_python, loader: cornstack, family: nl2code, license: apache-2.0, hf_id: nomic-ai/cornstack-python-v1, max_rows: 200000}
+  - {name: cornstack_python_c2t, loader: cornstack, family: code2nl, license: apache-2.0, hf_id: nomic-ai/cornstack-python-v1, max_rows: 50000, options: {reverse: true}}
+  - name: spider
+    loader: columns
+    family: text2sql
+    license: cc-by-sa-4.0
+    hf_id: xlangai/spider
+    options: {anchor: question, positive: query}

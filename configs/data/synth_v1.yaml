@@ -1,0 +1,13 @@
+# EXAMPLE synthetic sources (private/configs/data/synth_v1.yaml overrides this file).
+# Synthetic pairs written by Qwen2.5-Coder-7B-Instruct (Apache-2.0) for CoRNStack code (Apache-2.0); see
+# `make synth`. The code side is always real; only the query side is generated. Built into the same
+# data/mix_v1 directory so `ce3 audit` checks these rows against the benchmarks like every other source.
+# None of these share provenance with an eval task, so the mix stays 100% zero-shot.
+output_dir: data/mix_v1
+seed: 42
+dev_rows: 500
+sources:
+  - {name: synth_nl2code, loader: columns, family: nl2code, license: apache-2.0, data_files: data/synth/nl2code.parquet, options: {anchor: anchor, positive: positive}}
+  - {name: synth_techqa, loader: columns, family: techqa, license: apache-2.0, data_files: data/synth/techqa.parquet, options: {anchor: anchor, positive: positive}}
+  - {name: synth_code_edit, loader: columns, family: code_edit, license: apache-2.0, data_files: data/synth/code_edit.parquet, options: {anchor: anchor, positive: positive}}
+  - {name: synth_multiturn, loader: columns, family: multiturn, license: apache-2.0, data_files: data/synth/multiturn.parquet, options: {anchor: anchor, positive: positive}}

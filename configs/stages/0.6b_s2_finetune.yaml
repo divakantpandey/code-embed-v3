@@ -1,0 +1,20 @@
+# EXAMPLE starting values; tuned hyperparameters for released models are private.
+# Stage 2: fine-tune on mined hard negatives (`ce3 mine data/mix_v1 --model runs/0.6b/s1/final ...`).
+name: ce3-0.6b-s2
+model: configs/models/qwen3-0.6b-bidir.yaml
+init_from: runs/0.6b/s1/final
+data_dir: data/mix_v1_mined_0.6b
+dev_suite: data/mix_v1_mined_0.6b
+output_dir: runs/0.6b/s2
+hub_repo: divakantpandey/code-embed-v3-0.6b-s2
+loss: cached_mnrl
+batch_size: 512
+learning_rate: 3.0e-5
+num_train_epochs: 1
+warmup_ratio: 0.05
+temperature: 0.02
+hardness_mode: hard_negatives        # EmbeddingGemma-style up-weighting of mined negatives
+hardness_strength: 5.0
+max_seq_length: 1024
+save_steps: 500
+eval_steps: 500

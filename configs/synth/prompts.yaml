@@ -1,0 +1,17 @@
+# Example generation prompts. They work, but the prompts behind the released model are private
+# (see paths.py): drop a file at private/configs/synth/prompts.yaml to override this one.
+# @@CODE@@ is the seed snippet; @@STYLE@@ is filled with one of `styles` per row.
+system: "Reply with exactly one JSON object and nothing else."
+tasks:
+  nl2code:
+    user: 'Code:\n@@CODE@@\n\nWrite a search query a developer would type to find this code, as @@STYLE@@. JSON: {"query": "..."}'
+    styles: [a short question]
+  techqa:
+    user: 'Code:\n@@CODE@@\n\nWrite a programming question this code answers (@@STYLE@@) and an answer that includes the code. JSON: {"question": "...", "answer": "..."}'
+    styles: [from a developer]
+  code_edit:
+    user: 'Code:\n@@CODE@@\n\nPropose @@STYLE@@ to this code as a commit message and give the complete new code. JSON: {"request": "...", "new_code": "..."}'
+    styles: [one small change]
+  multiturn:
+    user: 'Code:\n@@CODE@@\n\nWrite a user/assistant conversation, @@STYLE@@, with 3 turns that starts and ends with the user, ending with the user asking for exactly what this code does. JSON: {"turns": [{"role": "user", "content": "..."}]}'
+    styles: [about a small task]

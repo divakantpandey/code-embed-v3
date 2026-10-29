@@ -1,0 +1,20 @@
+# EXAMPLE starting values; tuned hyperparameters for released models are private.
+# Stage 1: large-batch weakly-supervised contrastive pretraining on pairs.
+# Starting points, not tuned values: sweep lr and temperature in short ablations first.
+name: ce3-0.6b-s1
+model: configs/models/qwen3-0.6b-bidir.yaml
+data_dir: data/mix_v1
+dev_suite: data/mix_v1
+output_dir: runs/0.6b/s1
+hub_repo: divakantpandey/code-embed-v3-0.6b-s1
+loss: cached_mnrl
+batch_size: 8192   # global; GradCache, so memory is set by the auto-sized mini batch
+learning_rate: 5.0e-5
+num_train_epochs: 1
+warmup_ratio: 0.05
+temperature: 0.02
+directions: [query_to_doc, doc_to_query]
+multi_dataset_batch_sampler: proportional
+max_seq_length: 512
+save_steps: 100
+eval_steps: 200

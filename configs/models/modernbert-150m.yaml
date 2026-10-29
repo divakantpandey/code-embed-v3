@@ -1,0 +1,7 @@
+# Flagship: ~150M encoder. Most proven retrieval base at this size (GTE-ModernBERT, Granite-R2, DenseOn).
+name: code-embed-v3
+backbone: answerdotai/ModernBERT-base
+pooling: mean
+max_seq_length: 1024          # raised to 4096-8192 in the long-context stage
+matryoshka_dims: [768, 512, 256, 128, 64]
+attn_implementation: auto   # flash-attention 2 + unpadding on CUDA with the `flash` extra, else sdpa

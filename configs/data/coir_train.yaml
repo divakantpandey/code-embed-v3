@@ -1,0 +1,15 @@
+# OPT-IN in-domain mix: the official CoIR train splits (what jina-code-embeddings trained on).
+# Raises leaderboard numbers but lowers the zero-shot share mteb displays. Keep it a separate,
+# clearly-labelled ablation and report both numbers.
+output_dir: data/coir_train
+seed: 42
+dev_rows: 0
+sources:
+  - {name: coir_apps, loader: beir, family: nl2code, license: unverified-check-upstream, hf_id: CoIR-Retrieval/apps, overlaps_eval: [AppsRetrieval]}
+  - {name: coir_cosqa, loader: beir, family: nl2code, license: unverified-check-upstream, hf_id: CoIR-Retrieval/cosqa, overlaps_eval: [CosQA]}
+  - {name: coir_text2sql, loader: beir, family: text2sql, license: unverified-check-upstream, hf_id: CoIR-Retrieval/synthetic-text2sql, overlaps_eval: [SyntheticText2SQL]}
+  - {name: coir_so_qa, loader: beir, family: techqa, license: unverified-check-upstream, hf_id: CoIR-Retrieval/stackoverflow-qa, overlaps_eval: [StackOverflowQA]}
+  - {name: coir_cf_st, loader: beir, family: techqa, license: unverified-check-upstream, hf_id: CoIR-Retrieval/codefeedback-st, overlaps_eval: [CodeFeedbackST]}
+  - {name: coir_cf_mt, loader: beir, family: multiturn, license: unverified-check-upstream, hf_id: CoIR-Retrieval/codefeedback-mt, overlaps_eval: [CodeFeedbackMT]}
+  - {name: coir_trans_contest, loader: beir, family: code2code, license: unverified-check-upstream, hf_id: CoIR-Retrieval/codetrans-contest, overlaps_eval: [CodeTransOceanContest]}
+  - {name: coir_trans_dl, loader: beir, family: code2code, license: unverified-check-upstream, hf_id: CoIR-Retrieval/codetrans-dl, overlaps_eval: [CodeTransOceanDL]}

@@ -1,0 +1,23 @@
+# EXAMPLE starting values; tuned hyperparameters for released models are private.
+# Stage 3: distil teacher rankings (`ce3 label data/mix_v1_mined --teacher Qwen/Qwen3-Reranker-4B ...`,
+# or the trained 0.6B sibling). Calibrate teacher_temperature to the teacher's score spread first;
+# see DistillKLDivLoss docs on softmax underflow.
+name: ce3-0.6b-s3
+model: configs/models/qwen3-0.6b-bidir.yaml
+init_from: runs/0.6b/s2/final
+data_dir: data/mix_v1_labelled_0.6b
+dev_suite: data/mix_v1_labelled_0.6b
+output_dir: runs/0.6b/s3
+hub_repo: divakantpandey/code-embed-v3-0.6b-s3
+loss: distill_kl
+batch_size: 128
+learning_rate: 2.0e-5
+num_train_epochs: 1
+warmup_ratio: 0.05
+temperature: 0.02
+student_temperature: 0.02
+teacher_temperature: 1.0
+contrastive_weight: 0.1
+max_seq_length: 1024
+save_steps: 500
+eval_steps: 500

@@ -1,0 +1,11 @@
+# Ablation for the sibling slot: jina-code-embeddings recipe (causal, last-token pooling).
+# Qwen tokenizers do not append EOS; last-token pooling then reads the final content token, which is
+# what jina reports, but append "<|endoftext|>" in the data if an ablation shows EOS helps.
+name: code-embed-v3-0.5b-coder
+backbone: Qwen/Qwen2.5-Coder-0.5B
+pooling: lasttoken
+bidirectional: false
+max_seq_length: 1024
+matryoshka_dims: [896, 768, 512, 256, 128, 64]
+attn_implementation: sdpa
+torch_dtype: bfloat16

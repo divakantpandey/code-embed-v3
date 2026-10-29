@@ -1,0 +1,8 @@
+# Fine-tune-only flagship: start from GTE-ModernBERT (Apache-2.0, 71.66 on MTEB Code v1 per LightOn's table)
+# instead of pretraining ModernBERT-base. Pooling must match the checkpoint: it was trained with CLS.
+name: code-embed-v3
+backbone: Alibaba-NLP/gte-modernbert-base
+pooling: cls
+max_seq_length: 1024
+matryoshka_dims: [768, 512, 256, 128, 64]
+attn_implementation: auto   # flash-attention 2 + unpadding on CUDA with the `flash` extra, else sdpa

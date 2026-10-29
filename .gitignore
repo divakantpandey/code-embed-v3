@@ -1,0 +1,28 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# large artefacts: built data, checkpoints, results (root only: src/*/data and configs/data are code)
+/data/
+/runs/
+/results/
+/wandb/
+/tune/
+
+.env*
+!.env.example
+*.pem
+*.key
+.DS_Store
+
+# cluster dry runs
+/dryrun*/
+
+# private overlay: its own git repo (real data mix, tuned hyperparameters, prompts, strategy docs)
+/private/

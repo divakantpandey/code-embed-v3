@@ -1,0 +1,58 @@
+# OPT-IN, NOT ZERO-SHOT. Each source shares provenance with an MTEB(Code)/CoIR eval task, so mteb
+# flags any model trained on it, even after `ce3 audit` removes every overlapping test row: with all
+# of these in the mix MTEB(Code, v1) is only 50% zero-shot and CoIR 60%. Training refuses this data
+# unless the stage sets `allow_eval_overlap: true`; report such a run separately.
+output_dir: data/eval_overlap
+seed: 42
+dev_rows: 500
+sources:
+  # --- CodeSearchNet pairs in both directions (train split; eval uses test)
+  - name: csn_nl2code
+    loader: columns
+    family: nl2code
+    license: see-upstream-repos
+    hf_id: sentence-transformers/codesearchnet
+    options: {anchor: comment, positive: code}
+    overlaps_eval: [CodeSearchNetRetrieval]
+  - name: csn_code2nl
+    loader: columns
+    family: code2nl
+    license: see-upstream-repos
+    hf_id: sentence-transformers/codesearchnet
+    options: {anchor: code, positive: comment}
+    overlaps_eval: [COIRCodeSearchNetRetrieval]
+
+  # --- code_edit: commit message -> diff. CodeEditSearchRetrieval is derived from CommitPackFT.
+  - name: commitpackft
+    loader: commitpackft
+    family: code_edit
+    license: mit
+    data_files:
+      - hf://datasets/bigcode/commitpackft/data/python/data.jsonl
+      - hf://datasets/bigcode/commitpackft/data/javascript/data.jsonl
+      - hf://datasets/bigcode/commitpackft/data/java/data.jsonl
+      - hf://datasets/bigcode/commitpackft/data/go/data.jsonl
+      - hf://datasets/bigcode/commitpackft/data/typescript/data.jsonl
+      - hf://datasets/bigcode/commitpackft/data/rust/data.jsonl
+      - hf://datasets/bigcode/commitpackft/data/c++/data.jsonl
+      - hf://datasets/bigcode/commitpackft/data/c/data.jsonl
+      - hf://datasets/bigcode/commitpackft/data/ruby/data.jsonl
+      - hf://datasets/bigcode/commitpackft/data/php/data.jsonl
+    overlaps_eval: [CodeEditSearchRetrieval]
+
+  # --- techqa / multiturn source. CoIR's CodeFeedback tasks are built from this corpus.
+  - name: codefeedback
+    loader: columns
+    family: techqa
+    license: apache-2.0
+    hf_id: m-a-p/CodeFeedback-Filtered-Instruction
+    options: {anchor: query, positive: answer}
+    overlaps_eval: [CodeFeedbackST, CodeFeedbackMT]
+
+  # --- competitive programming: problem -> solution (train split only)
+  - name: apps
+    loader: apps
+    family: nl2code
+    license: mit
+    data_files: hf://datasets/codeparrot/apps/train.jsonl
+    overlaps_eval: [AppsRetrieval]

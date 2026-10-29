@@ -1,0 +1,9 @@
+# Sibling + distillation teacher: decoder made bidirectional, mean pooled (voyage-4-nano / pplx-embed recipe).
+name: code-embed-v3-0.6b
+backbone: Qwen/Qwen3-0.6B-Base
+pooling: mean
+bidirectional: true
+max_seq_length: 1024
+matryoshka_dims: [1024, 768, 512, 256, 128, 64]
+attn_implementation: sdpa
+torch_dtype: bfloat16

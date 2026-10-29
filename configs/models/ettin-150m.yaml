@@ -1,0 +1,7 @@
+# Ablation for the flagship slot: same ModernBERT architecture, fully open pretraining data (MIT).
+name: code-embed-v3-150m-ettin
+backbone: jhu-clsp/ettin-encoder-150m
+pooling: mean
+max_seq_length: 1024
+matryoshka_dims: [768, 512, 256, 128, 64]
+attn_implementation: auto   # flash-attention 2 + unpadding on CUDA with the `flash` extra, else sdpa
