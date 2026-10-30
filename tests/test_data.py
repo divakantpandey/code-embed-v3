@@ -287,3 +287,29 @@ def test_replace_dir_survives_undeletable_backup(monkeypatch: pytest.MonkeyPatch
     assert (dst / "new.txt").read_text() == "new" and not (dst / "old.txt").exists()
     assert not src.exists()
     assert not (tmp_path / "source.pre-audit" / "stale.txt").exists()
+
+
+@pytest.mark.parametrize(("write_outputs", "fails"), [(True, False), (False, True)])
+def test_vllm_worker_crash_after_writing_outputs_is_kept(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_outputs: bool, fails: bool
+) -> None:
+    from code_embed_v3.data import isolated
+
+    jobs = [{"output": str(tmp_path / f"{i}.npy")} for i in range(2)]
+
+    class Aborting:
+        def __init__(self, cmd: list[str], env: dict[str, str]) -> None:
+            self.args, self.returncode = cmd, -6
+            if write_outputs:
+                for job in jobs:
+                    Path(job["output"]).write_bytes(b"")
+
+        def wait(self) -> int:
+            return self.returncode
+
+    monkeypatch.setattr(isolated.subprocess, "Popen", Aborting)
+    if fails:
+        with pytest.raises(RuntimeError, match="vLLM workers failed"):
+            isolated.run_vllm_workers(tmp_path / "w.py", jobs, [], 1, tmp_path / "spec")
+    else:
+        isolated.run_vllm_workers(tmp_path / "w.py", jobs, [], 1, tmp_path / "spec")

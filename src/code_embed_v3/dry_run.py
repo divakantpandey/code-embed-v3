@@ -134,8 +134,30 @@ class DryRun:
             time.sleep(10)
         raise DryRunError(f"{repo}/{path} never appeared on the Hub")
 
+    def require_fresh_hub_repos(self) -> None:
+        """Every step resumes from its Hub repo, so a previous dry-run's leftovers would let generation,
+        resume and restore "pass" without running. Refuse unless the scratch repos are empty or absent."""
+        from huggingface_hub import HfApi
+        from huggingface_hub.errors import RepositoryNotFoundError
+
+        api = HfApi()
+        stale = []
+        for name, repo_type in (("synth", "dataset"), ("ft", "model"), ("s3", "model"), ("release", "model")):
+            repo = f"{self.hub_user}/ce3-dryrun-{name}"
+            try:
+                files = api.list_repo_files(repo, repo_type=repo_type)
+            except RepositoryNotFoundError:
+                continue
+            # A renamed repo's old name redirects to it, so its files show up here too.
+            if set(files) - {".gitattributes", "README.md"}:
+                stale.append(repo)
+        if stale:
+            raise DryRunError(f"scratch Hub repos from an earlier dry-run still hold files: {stale}")
+
     def run(self) -> None:
         data, mined, labelled = self.root / "data", self.root / "mined", self.root / "labelled"
+        if self.hub_user:
+            self.require_fresh_hub_repos()
         rows = str(self.rows)
         self.ce3("doctor", "doctor", "--min-free-gb", "30")
         self.ce3(
