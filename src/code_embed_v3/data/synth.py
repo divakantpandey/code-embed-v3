@@ -140,15 +140,19 @@ class Prompts:
     tasks: dict[str, SynthTask]
 
 
-def load_prompts(path: str | Path | None = None) -> Prompts:
+def load_prompts(
+    path: str | Path | None = None,
+    parsers: dict[str, tuple[Family, Callable[[str, str], Row | None]]] | None = None,
+) -> Prompts:
+    parsers = parsers or PARSERS
     raw = load_yaml(path or resolve(PROMPTS))
     tasks = {}
     for name, spec in raw["tasks"].items():
-        if name not in PARSERS:
-            raise ValueError(f"unknown synth task {name!r}; known: {sorted(PARSERS)}")
+        if name not in parsers:
+            raise ValueError(f"unknown synth task {name!r}; known: {sorted(parsers)}")
         if "@@CODE@@" not in spec["user"] or (spec.get("styles") and "@@STYLE@@" not in spec["user"]):
             raise ValueError(f"synth task {name}: prompt needs @@CODE@@ (and @@STYLE@@ when styles are set)")
-        family, parse = PARSERS[name]
+        family, parse = parsers[name]
         tasks[name] = SynthTask(family, spec["user"], tuple(spec.get("styles") or ("",)), parse)
     return Prompts(system=raw["system"], tasks=tasks)
 

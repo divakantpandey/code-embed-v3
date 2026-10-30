@@ -29,11 +29,16 @@ def _cmd_audit(a: argparse.Namespace) -> None:
     import mteb
     from datasets import Dataset
 
-    from code_embed_v3.data.build import read_manifest, write_manifest
-    from code_embed_v3.data.contamination import audit_dataset, index_mteb_tasks, write_report
+    from code_embed_v3.data.build import DEV_DIR, read_manifest, source_dir, write_manifest
+    from code_embed_v3.data.contamination import audit_dataset, index_mteb_tasks, index_texts, write_report
     from code_embed_v3.env import available_cpus
     from code_embed_v3.eval.run_mteb import DEFAULT_BENCHMARKS
 
+    external: dict[str, list[str]] = {}
+    if a.external and not a.tasks:
+        from code_embed_v3.eval.behaviour_eval import external_texts
+
+        external = external_texts()
     task_names = sorted(
         set(a.tasks)
         if a.tasks
@@ -51,20 +56,33 @@ def _cmd_audit(a: argparse.Namespace) -> None:
     if not pending:
         print("every source is already audited against these tasks")
         return
-    index = index_mteb_tasks(task_names)
+    task_names = sorted(set(task_names) | set(external))
+    index = index_mteb_tasks([t for t in task_names if t not in external])
+    index_texts(external, index)
     report_path = Path(a.data_dir) / "contamination_report.json"
     report: dict[str, dict[str, int]] = json.loads(report_path.read_text()) if report_path.exists() else {}
+    num_proc = a.num_proc or available_cpus()
     for name, meta in pending.items():
-        path = Path(a.data_dir) / name
+        path = source_dir(a.data_dir, name, meta)
         ds = load_from_disk(str(path))
         if not isinstance(ds, Dataset):
             raise TypeError(f"{path} is not a single Dataset")
-        kept, counts = audit_dataset(ds, index, num_proc=a.num_proc or available_cpus())
+        kept, counts = audit_dataset(ds, index, num_proc=num_proc)
         report[name] = {"before": len(ds), "after": len(kept), **dict(counts)}
         tmp = path.with_name(path.name + ".audited")
         kept.save_to_disk(str(tmp))
         del ds
         _replace_dir(tmp, path)
+        dev_path = Path(a.data_dir) / DEV_DIR / name
+        if dev_path.exists():
+            dev_ds = load_from_disk(str(dev_path))
+            if isinstance(dev_ds, Dataset):
+                kept_dev, _ = audit_dataset(dev_ds, index, num_proc=num_proc)
+                dev_tmp = dev_path.with_name(dev_path.name + ".audited")
+                kept_dev.save_to_disk(str(dev_tmp))
+                del dev_ds
+                _replace_dir(dev_tmp, dev_path)
+                meta["dev_rows"] = len(kept_dev)
         meta.update(rows=len(kept), audited=True, audited_against=task_names, contamination_hits=dict(counts))
         print(f"{name}: {report[name]}")
         # Per source, so a lost pod does not redo finished sources.
@@ -76,9 +94,16 @@ def _replace_dir(src: Path, dst: Path) -> None:
     import shutil
 
     backup = dst.with_name(dst.name + ".pre-audit")
+    if backup.exists():
+        shutil.rmtree(backup)
     dst.rename(backup)
     src.rename(dst)
-    shutil.rmtree(backup)
+    try:
+        shutil.rmtree(backup)
+    except OSError as e:
+        # NFS (RunPod volumes) keeps .nfsXXXX stubs for files still memory-mapped by the filtered
+        # dataset, so rmdir fails until the process exits. The backup is garbage; the next audit clears it.
+        print(f"warning: could not fully remove {backup}: {e}")
 
 
 def _cmd_mine(a: argparse.Namespace) -> None:
@@ -167,6 +192,7 @@ def _cmd_label(a: argparse.Namespace) -> None:
 
 def _cmd_label_check(a: argparse.Namespace) -> None:
     """Score the same sample with both backends; vLLM is only trusted if it ranks like the reference."""
+    import gc
     import shutil
 
     import numpy as np
@@ -178,14 +204,25 @@ def _cmd_label_check(a: argparse.Namespace) -> None:
     from code_embed_v3.data.mining import crossencoder_scorer, label_source, load_dataset_dir, vllm_scorer
 
     work = Path(a.work_dir)
-    reference = crossencoder_scorer(CrossEncoder(a.teacher), batch_size=a.batch_size)
-    fast = vllm_scorer(a.teacher, num_gpus=max(1, torch.cuda.device_count()))
-    report: dict[str, dict[str, float]] = {}
+    samples = {}
     for name, meta in read_manifest(a.data_dir)["sources"].items():
         ds = load_dataset_dir(Path(a.data_dir) / name)
-        ds = ds.select(range(min(a.rows, len(ds))))
-        ref = np.asarray(label_source(ds, reference, meta["family"], work / "ref" / name)["label"])
-        vll = np.asarray(label_source(ds, fast, meta["family"], work / "vllm" / name)["label"])
+        samples[name] = (ds.select(range(min(a.rows, len(ds)))), meta["family"])
+    teacher = CrossEncoder(a.teacher)
+    reference = crossencoder_scorer(teacher, batch_size=a.batch_size)
+    refs = {
+        name: np.asarray(label_source(ds, reference, family, work / "ref" / name)["label"])
+        for name, (ds, family) in samples.items()
+    }
+    # vLLM claims a fixed share of total GPU memory at start-up, so the in-process teacher must be gone first.
+    del teacher, reference
+    gc.collect()
+    torch.cuda.empty_cache()
+    fast = vllm_scorer(a.teacher, num_gpus=max(1, torch.cuda.device_count()))
+    report: dict[str, dict[str, float]] = {}
+    for name, (ds, family) in samples.items():
+        ref = refs[name]
+        vll = np.asarray(label_source(ds, fast, family, work / "vllm" / name)["label"])
         rho = float(spearmanr(ref.ravel(), vll.ravel()).statistic)
         report[name] = {"spearman": rho, "max_abs_diff": float(np.abs(ref - vll).max())}
         print(f"{name}: {report[name]}")
@@ -257,6 +294,138 @@ def _cmd_synth(a: argparse.Namespace) -> None:
             stats_path, a.push_repo, path_in_repo=f"{a.task}/{stats_path.name}", repo_type="dataset"
         )
     print(json.dumps(meta, indent=2))
+
+
+def _cmd_behaviour_build(a: argparse.Namespace) -> None:
+    import torch
+
+    from code_embed_v3 import hub
+    from code_embed_v3.data import behaviour, synth
+    from code_embed_v3.env import available_cpus
+    from code_embed_v3.sandbox import require_isolation
+
+    require_isolation()  # fail before downloading or generating anything
+    out, work = Path(a.out_dir), Path(a.out_dir) / ".work"
+    remote = "behaviour/work"
+    if a.push_repo and not work.exists():
+        hub.fetch_folder(a.push_repo, remote, work, repo_type="dataset")
+    run = behaviour.sandbox_runner(a.workers or available_cpus())
+    verified = work / "verified.jsonl"
+    if verified.exists():
+        problems = list(behaviour.read_problems(verified))
+    else:
+        problems = behaviour.load_problems(a.max_problems)
+        behaviour.verify_humans(problems, run)
+        behaviour.dump_problems(problems, verified)
+    print(f"{len(problems)} problems, {sum(bool(p.correct) for p in problems)} with a verified solution")
+
+    def push_work() -> None:
+        if a.push_repo:
+            hub.push_folder(work, a.push_repo, remote, repo_type="dataset", message="behaviour: shards")
+
+    # Justification: only spin up vLLM when LLM variants are requested. With `--mutants 0 --rewrites 0`,
+    # human contest near-misses and SWE-smith patch twins build with zero GPU/vLLM cost on a CPU pod.
+    if a.mutants > 0 or a.rewrites > 0:
+        generator = synth.vllm_generator(a.generator, num_gpus=max(1, torch.cuda.device_count()), seed=a.seed)
+        variants = behaviour.generate_variants(
+            problems, generator, work, a.mutants, a.rewrites, after_round=push_work
+        )
+        stats = behaviour.verify_variants(problems, variants, run)
+    else:
+        stats = {"mutants_kept": 0, "mutants_seen": 0, "rewrites_kept": 0, "rewrites_seen": 0}
+    nl2code, code2code = behaviour.build_rows(problems, a.negatives, a.repeats, seed=a.seed)
+    swe_twins = behaviour.load_swe_smith_twins(max_rows=a.swe_smith_rows, negatives=a.negatives, seed=a.seed)
+    behaviour.save(out, nl2code, code2code, swe_twins=swe_twins)
+    stats |= {
+        "problems": len(problems),
+        "nl2code_rows": len(nl2code),
+        "code2code_rows": len(code2code),
+        "swe_twins_rows": len(swe_twins),
+    }
+    (out / "stats.json").write_text(json.dumps(stats, indent=2))
+    if a.push_repo:
+        hub.push_folder(out, a.push_repo, "behaviour/data", repo_type="dataset", message="behaviour: data")
+    print(json.dumps(stats, indent=2))
+
+
+def _cmd_behaviour_combine(a: argparse.Namespace) -> None:
+    """A mix that references both inputs' sources in place (manifest `path`), plus their dev slices.
+
+    Inputs can share anchors (SWE-smith issues sit in both the replay mix and the behaviour twins),
+    so train rows whose anchor is any input's dev anchor are dropped into a filtered copy.
+    """
+    import shutil
+
+    from datasets import Dataset
+
+    from code_embed_v3.data.build import DEV_DIR, read_manifest, source_dir, write_manifest
+
+    out = Path(a.output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    manifests = {d: read_manifest(d)["sources"] for d in a.data_dirs}
+    held: set[str] = set()
+    for d, sources in manifests.items():
+        for name in sources:
+            dev = Path(d) / DEV_DIR / name
+            if dev.exists():
+                held.update(load_from_disk(str(dev))["anchor"])
+    combined: dict[str, Any] = {"sources": {}}
+    for d, sources in manifests.items():
+        for name, meta in sources.items():
+            if name in combined["sources"]:
+                raise ValueError(f"source {name} appears in more than one input")
+            path = source_dir(d, name, meta).resolve()
+            ds = load_from_disk(str(path))
+            if not isinstance(ds, Dataset):
+                raise TypeError(f"{path} is not a single Dataset")
+            kept = ds.filter(lambda r: r["anchor"] not in held, keep_in_memory=True)
+            entry = {**meta, "path": str(path)}
+            if len(kept) < len(ds):
+                if (out / name).exists():
+                    shutil.rmtree(out / name)
+                kept.save_to_disk(str(out / name))
+                entry.update(
+                    path=str((out / name).resolve()),
+                    rows=len(kept),
+                    dev_anchor_rows_dropped=len(ds) - len(kept),
+                )
+                print(f"{name}: dropped {len(ds) - len(kept)} rows sharing a dev anchor")
+            combined["sources"][name] = entry
+            dev = Path(d) / DEV_DIR / name
+            if dev.exists() and not (out / DEV_DIR / name).exists():
+                shutil.copytree(dev, out / DEV_DIR / name)
+    write_manifest(out, combined)
+    print(out)
+
+
+def _cmd_behaviour_eval(a: argparse.Namespace) -> None:
+    from code_embed_v3.eval.behaviour_eval import COQUIR_SUBSETS, evaluate
+    from code_embed_v3.modeling import load_model
+
+    results = evaluate(
+        load_model(a.model), batch_size=a.batch_size, subsets=tuple(a.subsets or COQUIR_SUBSETS)
+    )
+    out = Path(a.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({"model": a.model, **results}, indent=2))
+    print(json.dumps(results, indent=2))
+
+
+def _cmd_pilot_gate(a: argparse.Namespace) -> None:
+    from code_embed_v3.eval.behaviour_eval import mteb_code_mean, pilot_gate
+
+    ok, report = pilot_gate(
+        json.loads(Path(a.baseline).read_text()),
+        json.loads(Path(a.candidate).read_text()),
+        mteb_code_mean(Path(a.mteb_baseline)),
+        mteb_code_mean(Path(a.mteb_candidate)),
+        min_exec_gain=a.min_exec_gain,
+        max_mteb_drop=a.max_mteb_drop,
+        max_coquir_drop=a.max_coquir_drop,
+    )
+    print(json.dumps({"go": ok, **report}, indent=2))
+    if not ok:
+        raise SystemExit("pilot gate: NO-GO")
 
 
 def _cmd_train(a: argparse.Namespace) -> None:
@@ -421,7 +590,10 @@ def _cmd_merge(a: argparse.Namespace) -> None:
 
     from code_embed_v3.modeling import META_FILE
 
-    merged = SentenceTransformer.merge(a.models, method=a.method)
+    if a.weights is not None and len(a.weights) != len(a.models):
+        raise SystemExit(f"--weights has {len(a.weights)} values for {len(a.models)} models")
+    parameters = {"weight": a.weights} if a.weights is not None else None
+    merged = SentenceTransformer.merge(a.models, method=a.method, parameters=parameters)
     merged.save(a.output)
     meta = Path(a.models[0]) / META_FILE
     if meta.exists():
@@ -488,6 +660,12 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("data_dir")
     s.add_argument("--benchmarks", nargs="*")
     s.add_argument("--tasks", nargs="*", help="audit against these tasks only (dry runs)")
+    s.add_argument(
+        "--no-external",
+        dest="external",
+        action="store_false",
+        help="skip the non-mteb held-out benchmarks (ExecRetrieval, CoQuIR)",
+    )
     s.add_argument("--num-proc", type=int, help="default: every CPU this container may use")
     s.set_defaults(fn=_cmd_audit)
 
@@ -544,6 +722,53 @@ def main(argv: list[str] | None = None) -> None:
         help="private Hub dataset for outputs, raw replies and resume; '' disables",
     )
     s.set_defaults(fn=_cmd_synth)
+
+    s = sub.add_parser(
+        "behaviour-build", help="test-verified near-miss negatives and rewrites (cluster only)"
+    )
+    s.add_argument("--out-dir", default="data/behaviour")
+    s.add_argument("--max-problems", type=int, default=5000)
+    s.add_argument("--mutants", type=int, default=6, help="LLM single-edit bugs requested per solution")
+    s.add_argument("--rewrites", type=int, default=2, help="LLM equivalent rewrites requested per solution")
+    s.add_argument("--negatives", type=int, default=4, help="near-miss negatives per training row")
+    s.add_argument("--repeats", type=int, default=8, help="resampled rows per problem")
+    s.add_argument(
+        "--swe-smith-rows",
+        type=int,
+        default=5000,
+        help="zero-LLM repository bug-fix twins extracted from SWE-bench/SWE-smith (0 disables)",
+    )
+    s.add_argument("--generator", default="Qwen/Qwen2.5-Coder-7B-Instruct")
+    s.add_argument("--workers", type=int, help="parallel test runs; default: every CPU")
+    s.add_argument("--push-repo", default="divakantpandey/code-embed-v3-synth", help="'' disables")
+    s.add_argument("--seed", type=int, default=0)
+    s.set_defaults(fn=_cmd_behaviour_build)
+
+    s = sub.add_parser("behaviour-combine", help="one mix that references several built mixes in place")
+    s.add_argument("data_dirs", nargs="+")
+    s.add_argument("--output-dir", required=True)
+    s.set_defaults(fn=_cmd_behaviour_combine)
+
+    s = sub.add_parser("behaviour-eval", help="ExecRetrieval exec@1 and CoQuIR pairwise accuracy")
+    s.add_argument("model")
+    s.add_argument("--out", required=True)
+    s.add_argument("--subsets", nargs="*", help="CoQuIR subsets; default: all")
+    s.add_argument("--batch-size", type=int, default=64)
+    s.set_defaults(fn=_cmd_behaviour_eval)
+
+    s = sub.add_parser(
+        "pilot-gate", help="go/no-go: exec@1 gain, MTEB(Code) and CoQuIR drop against a baseline"
+    )
+    s.add_argument("--baseline", required=True, help="behaviour-eval JSON of the baseline")
+    s.add_argument("--candidate", required=True)
+    s.add_argument("--mteb-baseline", required=True, help="mteb results folder")
+    s.add_argument("--mteb-candidate", required=True)
+    s.add_argument("--min-exec-gain", type=float, default=0.10)
+    s.add_argument("--max-mteb-drop", type=float, default=0.005)
+    s.add_argument(
+        "--max-coquir-drop", type=float, default=0.01, help="mean CoQuIR pairwise accuracy, 0-1 scale"
+    )
+    s.set_defaults(fn=_cmd_pilot_gate)
 
     s = sub.add_parser("train", help="run one training stage")
     s.add_argument("config")
@@ -606,6 +831,12 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("merge", help="merge checkpoints (needs the `merge` extra)")
     s.add_argument("models", nargs="+")
     s.add_argument("--method", default="linear")
+    s.add_argument(
+        "--weights",
+        type=float,
+        nargs="+",
+        help="one per model, e.g. 0.6 0.4 to pull a fine-tune toward its base",
+    )
     s.add_argument("--output", required=True)
     s.set_defaults(fn=_cmd_merge)
 

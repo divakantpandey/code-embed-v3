@@ -1,4 +1,4 @@
-.PHONY: install check test test-network lint typecheck doctor dry-run data synth pull-data label-check s1 s2 s3 s4 mteb release finetune mteb-ft release-ft tune
+.PHONY: install check test test-network lint typecheck doctor dry-run data synth pull-data label-check s1 s2 s3 s4 mteb release mine-gte finetune pilot mteb-ft release-ft tune
 
 # Every step below skips work already done locally or on the Hub, so after a lost pod
 # `make pull-data s1 s2 s3 s4` picks up where it stopped.
@@ -57,13 +57,45 @@ pull-data:
 
 GTE := Alibaba-NLP/gte-modernbert-base
 STAGE ?= $(call cfg,configs/stages/150m_ft_minimal.yaml)
+# Justification: GTE-ModernBERT-base (71.66 MTEB Code) is already pretrained on millions of pairs;
+# it only needs a lean replay buffer (25k rows/source = ~250k total, 4 mined negatives) to prevent
+# catastrophic forgetting while learning execution-verified twin separation. Cutting from 250k x 7
+# negatives to 25k x 4 reduces sequence forward/backward passes by ~16x (~$3 pilot on 1x RTX 4090).
+# Override with `make finetune MINE_ROWS=250000 MINE_NEGS=7` for a full-scale Option A run.
+MINE_ROWS ?= 25000
+MINE_NEGS ?= 4
+# Set `MUTANTS=0 REWRITES=0` to skip vLLM generation and build behaviour data purely from verified
+# human CodeContests near-misses + SWE-smith correct/buggy patch twins ($0 LLM GPU cost).
+MUTANTS ?= 6
+REWRITES ?= 2
+SWE_ROWS ?= 5000
 
 # --- Option A: fine-tune GTE-ModernBERT, no pretraining ---
-finetune:
+mine-gte:
 	uv run ce3 zero-shot data/mix_v1 --base-model $(GTE)
-	uv run ce3 mine data/mix_v1 --model $(GTE) --no-query-prompts --max-rows-per-source 250000 --output-dir data/mix_v1_gte_mined
+	uv run ce3 mine data/mix_v1 --model $(GTE) --no-query-prompts \
+		--num-negatives $(MINE_NEGS) --max-rows-per-source $(MINE_ROWS) --output-dir data/mix_v1_gte_mined
 	uv run ce3 push-data data/mix_v1_gte_mined --repo $(DATA_REPO)
+
+finetune: mine-gte
 	uv run ce3 train $(STAGE)
+
+# --- Behaviour pilot: does test-verified data teach "works" over "looks right"? Go/no-go at the end. ---
+B := data/behaviour
+pilot: mine-gte
+	uv run ce3 behaviour-build --out-dir $(B) --max-problems 5000 \
+		--mutants $(MUTANTS) --rewrites $(REWRITES) --swe-smith-rows $(SWE_ROWS)
+	uv run ce3 audit $(B)
+	uv run ce3 behaviour-combine data/mix_v1_gte_mined $(B) --output-dir data/mix_v1_gte_behaviour
+	uv run ce3 zero-shot data/mix_v1_gte_behaviour --base-model $(GTE)
+	uv run ce3 train $(call cfg,configs/stages/150m_ft_behaviour.yaml)
+	uv run ce3 behaviour-eval $(GTE) --out results/behaviour/gte.json
+	uv run ce3 behaviour-eval runs/150m/ft_behaviour/final --out results/behaviour/ft_behaviour.json
+	uv run ce3 mteb $(GTE) --name $(GTE) --benchmarks "MTEB(Code, v1)" --output results/mteb-gte
+	uv run ce3 mteb runs/150m/ft_behaviour/final --name $(MODEL_REPO) --benchmarks "MTEB(Code, v1)" \
+		--data-dirs data/mix_v1 $(B) --base-model $(GTE) --output results/mteb-ft-behaviour
+	uv run ce3 pilot-gate --baseline results/behaviour/gte.json --candidate results/behaviour/ft_behaviour.json \
+		--mteb-baseline results/mteb-gte --mteb-candidate results/mteb-ft-behaviour
 
 mteb-ft:
 	uv run ce3 mteb runs/150m/ft/final --name $(MODEL_REPO) --data-dirs data/mix_v1 --base-model $(GTE)

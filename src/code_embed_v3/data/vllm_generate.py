@@ -33,7 +33,9 @@ def main() -> None:
         gpu_memory_utilization=a.gpu_memory_utilization,
         seed=a.seed,
     )
-    params = SamplingParams(temperature=a.temperature, top_p=0.95, max_tokens=a.max_tokens, seed=a.seed)
+    # No per-request seed: several rows can carry the same prompt (k variants of one snippet), and a
+    # fixed per-request seed would make them identical. The engine seed keeps runs reproducible.
+    params = SamplingParams(temperature=a.temperature, top_p=0.95, max_tokens=a.max_tokens)
 
     for job in json.loads(Path(a.jobs).read_text()):
         out = Path(job["output"])

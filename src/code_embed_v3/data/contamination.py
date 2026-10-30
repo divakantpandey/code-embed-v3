@@ -90,6 +90,8 @@ def index_mteb_tasks(task_names: list[str], index: EvalIndex | None = None) -> E
     for name in task_names:
         task = mteb.get_task(name)
         task.load_data()
+        if hasattr(task, "convert_v1_dataset_format_to_v2"):
+            task.convert_v1_dataset_format_to_v2(num_proc=None)
         if task.dataset is None:
             raise RuntimeError(f"{name}: mteb loaded no data")
         for subset in task.dataset.values():
@@ -106,6 +108,14 @@ def index_mteb_tasks(task_names: list[str], index: EvalIndex | None = None) -> E
                     if d["id"] in wanted_docs:
                         index.add(name, text_of(d.get("text", "")))
         logger.info("indexed %s (%d unique eval texts so far)", name, len(index))
+    return index
+
+
+def index_texts(texts: dict[str, list[str]], index: EvalIndex) -> EvalIndex:
+    """Add non-mteb held-out benchmarks (ExecRetrieval, CoQuIR) under their own task names."""
+    for name, items in texts.items():
+        for text in items:
+            index.add(name, text)
     return index
 
 

@@ -1,0 +1,10 @@
+# Example prompts for `ce3 behaviour-build`; private/configs/synth/behaviour_prompts.yaml overrides them.
+# Every variant is kept or dropped by running the problem's tests, never by trusting the model.
+system: "Reply with exactly one JSON object and nothing else."
+tasks:
+  mutate:
+    user: 'Correct program:\n@@CODE@@\n\nIntroduce one small bug (@@STYLE@@). Keep it valid and the I/O format unchanged. JSON: {"code": "..."}'
+    styles: [any kind]
+  rewrite:
+    user: 'Correct program:\n@@CODE@@\n\nRewrite it to behave identically but look different (@@STYLE@@). JSON: {"code": "..."}'
+    styles: [any style]

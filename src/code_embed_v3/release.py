@@ -66,7 +66,7 @@ def model_card(
 
     # Read from the loaded model: config file keys differ across sentence-transformers versions.
     model = load_model(model_dir, device="cpu")
-    dims = model.get_sentence_embedding_dimension()
+    dims = model.get_embedding_dimension()
     max_len = model.max_seq_length
     smaller = [d for d in (512, 256, 128, 64) if dims and d < dims]
     prompts = {k: v for k, v in model.prompts.items() if v}

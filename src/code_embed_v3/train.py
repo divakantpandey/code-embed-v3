@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -71,7 +72,9 @@ class DistillWithContrastive(nn.Module):
 
     def forward(self, sentence_features: list[dict[str, Tensor]], labels: Tensor) -> Tensor:
         embeddings = [self.model(f)["sentence_embedding"] for f in sentence_features]
-        loss = self.kl.compute_loss_from_embeddings(embeddings, labels)
+        # DistillKLDivLoss multiplies by student_temperature**2, which shrinks its gradient by 1/tau^2
+        # relative to MultipleNegativesRankingLoss(scale=1/tau) when student_temperature << 1.
+        loss = self.kl.compute_loss_from_embeddings(embeddings, labels) / (self.kl.student_temperature**2)
         if self.contrastive_weight > 0:
             loss = loss + self.contrastive_weight * self.mnrl.compute_loss_from_embeddings(embeddings, labels)
         return loss
@@ -82,6 +85,74 @@ class DistillWithContrastive(nn.Module):
             "contrastive_weight": self.contrastive_weight,
             "scale": self.mnrl.scale,
         }
+
+
+class WeightedLoss(nn.Module):
+    """One source's loss times a constant. GradCache scales its cached embedding gradients by the
+    incoming grad_output, so the weight reaches them as well."""
+
+    def __init__(self, loss: nn.Module, weight: float) -> None:
+        super().__init__()
+        self.loss = loss
+        self.weight = weight
+
+    @property
+    def model(self) -> nn.Module:
+        # Trainer only re-binds the DDP-wrapped model into losses that expose `model`.
+        model = self.loss.model
+        if not isinstance(model, nn.Module):
+            raise TypeError(f"{type(self.loss).__name__}.model is {type(model).__name__}, not a module")
+        return model
+
+    def forward(self, sentence_features: list[dict[str, Tensor]], labels: Tensor | None) -> Tensor:
+        loss: Tensor = self.loss(sentence_features, labels)
+        return self.weight * loss
+
+
+def per_source_loss(
+    loss: nn.Module, sources: list[str], weights: dict[str, float]
+) -> nn.Module | dict[str, nn.Module]:
+    unknown = set(weights) - set(sources)
+    if unknown:
+        raise ValueError(f"source_loss_weights names unknown sources {sorted(unknown)}; have {sources}")
+    if not weights:
+        return loss
+    return {name: WeightedLoss(loss, weights[name]) if name in weights else loss for name in sources}
+
+
+class TrainingCollapsed(RuntimeError):
+    pass
+
+
+class TrainingShortfall(RuntimeError):
+    pass
+
+
+class CollapseGuard(TrainerCallback):
+    """Stops training once the dev score falls below ``ratio`` x the untrained model's score.
+
+    A collapsed model shows a flat loss and small gradients (the first dry-run trained ~90 steps past
+    collapse), so only an embedding-quality signal catches it.
+    """
+
+    def __init__(self, ratio: float, baseline: float = math.nan) -> None:
+        # NaN until scored: every comparison is False, so an unset baseline never stops training.
+        self.baseline = baseline
+        self.ratio = ratio
+        self.tripped: tuple[int, float] | None = None
+
+    def on_evaluate(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        metrics: dict[str, float] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        score = next((v for k, v in (metrics or {}).items() if k.endswith("sequential_score")), None)
+        if score is not None and score < self.ratio * self.baseline:
+            self.tripped = (state.global_step, score)
+            control.should_training_stop = True
 
 
 def build_loss(
@@ -133,6 +204,12 @@ class StageTrainer(SentenceTransformerTrainer):
         if target is None:
             return
         (Path(target) / META_FILE).write_text(json.dumps(self._meta, indent=2))
+
+    def evaluation_loop(self, *args: Any, **kwargs: Any) -> Any:
+        # sentence-transformers calls the dev evaluator outside autocast; with fp32 master weights that
+        # would feed fp32 into flash-attention, which only takes fp16/bf16.
+        with self.accelerator.autocast():
+            return super().evaluation_loop(*args, **kwargs)
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         if "loss" in logs:
@@ -395,18 +472,48 @@ def run_stage(
         # Otherwise Trainer moves the model to MPS/CUDA regardless of `device`.
         use_cpu=device == "cpu",
     )
+    guard = None
+    if stage.collapse_guard is not None:
+        if evaluator is None:
+            raise ValueError("collapse_guard needs a dev_suite to score against")
+        guard = CollapseGuard(stage.collapse_guard)
+    loss = build_loss(stage, model_cfg, model, mini_batch, num_tokens)
     trainer = StageTrainer(
         model=model,
         args=args,
         train_dataset=train_dataset,
-        loss=build_loss(stage, model_cfg, model, mini_batch, num_tokens),
+        loss=per_source_loss(loss, list(train_dataset), stage.source_loss_weights),
         evaluator=evaluator,
-        callbacks=[LogRunMetadata(stage, model_cfg), *(callbacks or [])],
+        callbacks=[LogRunMetadata(stage, model_cfg), *([guard] if guard else []), *(callbacks or [])],
         meta=model_meta(model_cfg),
     )
+    if guard is not None and evaluator is not None:
+        # Scored before any weights are loaded, so a resumed run still compares to the untrained model.
+        with trainer.accelerator.autocast():
+            guard.baseline = float(evaluator(model)["sequential_score"])
+        logger.info(
+            "collapse guard: untrained dev score %.4f, stop below %.4f",
+            guard.baseline,
+            guard.ratio * guard.baseline,
+        )
     if resume_from is not None:
         logger.info("resuming from %s", resume_from)
     trainer.train(resume_from_checkpoint=str(resume_from) if resume_from else None)
+    # The no-duplicates sampler gives up quietly (one warning_once) when a source's rows share too many
+    # texts, and the epoch then ends early. Short by more than the last partial batches = data starvation.
+    planned, done = trainer.state.max_steps, trainer.state.global_step
+    stopped_by_guard = guard is not None and guard.tripped is not None
+    if not stopped_by_guard and done < stage.min_step_fraction * planned:
+        raise TrainingShortfall(
+            f"trained {done} of {planned} planned steps; the no-duplicates sampler could not fill batches "
+            "(too many shared texts per source, e.g. mined negatives); see the sampler warning in the log"
+        )
+    if guard is not None and guard.tripped is not None:
+        step, score = guard.tripped
+        raise TrainingCollapsed(
+            f"dev score {score:.4f} at step {step} is below {guard.ratio} x untrained {guard.baseline:.4f}; "
+            "no final model saved"
+        )
 
     final = Path(stage.output_dir) / "final"
     if trainer.is_world_process_zero():

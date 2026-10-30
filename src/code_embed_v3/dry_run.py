@@ -178,18 +178,23 @@ class DryRun:
             "--model",
             GTE,
             "--no-query-prompts",
+            # The pilot's MINE_NEGS. With the default 7 at 300 rows/source, the no-duplicates sampler
+            # cannot fill batches from mined sources, so the dry-run trained almost only on behaviour data.
+            "--num-negatives",
+            "4",
             "--output-dir",
             str(mined),
             "--batch-size",
             "128",
         )
+        combined = self.behaviour(data, mined, synth_repo)
 
         per_gpu = 16
         ft = self.stage(
             "ft",
-            "150m_ft_minimal.yaml",
-            data_dir=str(mined),
-            dev_suite=str(mined),
+            "150m_ft_behaviour.yaml",
+            data_dir=str(combined),
+            dev_suite=str(combined),
             batch_size=per_gpu * self.gpus,
             max_seq_length=256,
             max_steps=120,
@@ -242,6 +247,12 @@ class DryRun:
             eval_steps=6,
         )
         self.ce3("train-s3", "train", str(s3))
+        base_eval, ft_eval = self.root / "behaviour_eval_base.json", self.root / "behaviour_eval.json"
+        for step, model, result in (
+            ("behaviour-eval-base", GTE, base_eval),
+            ("behaviour-eval", str(ft_out / "final"), ft_eval),
+        ):
+            self.ce3(step, "behaviour-eval", model, "--subsets", "Defects4J", "--out", str(result))
         self.ce3(
             "mteb",
             "mteb",
@@ -269,7 +280,48 @@ class DryRun:
                 "--contamination-report",
                 str(data / "contamination_report.json"),
             )
-        self.summary(ft_out)
+        from code_embed_v3.eval.behaviour_eval import no_collapse
+
+        healthy, kept = no_collapse(json.loads(base_eval.read_text()), json.loads(ft_eval.read_text()))
+        self.summary(ft_out, kept)
+        # Raised last so one dry-run still exercises every later step on a collapsed model.
+        if not healthy:
+            raise DryRunError(f"fine-tune collapsed: score kept vs base {kept}")
+
+    def behaviour(self, data: Path, mined: Path, push_repo: str) -> Path:
+        """Sandbox, variant generation and verification on a handful of problems, merged into the mix."""
+        out = self.root / "behaviour"
+        self.ce3(
+            "behaviour-build",
+            "behaviour-build",
+            "--out-dir",
+            str(out),
+            "--max-problems",
+            "40",
+            "--mutants",
+            "3",
+            "--rewrites",
+            "1",
+            "--negatives",
+            "1",
+            "--repeats",
+            "1",
+            # The 5,000-row default would make twins ~60% of a 300-rows-per-source mix (vs ~1% in the
+            # pilot), and at that share they collapse even a plain recipe (private/docs/RESEARCH_LOG.md).
+            "--swe-smith-rows",
+            str(self.rows),
+            "--push-repo",
+            push_repo,
+        )
+        stats = json.loads((out / "stats.json").read_text())
+        if not stats["mutants_kept"]:
+            raise DryRunError(f"no verified near-miss mutants; sandbox or generator broken: {stats}")
+        self.ce3("audit-behaviour", "audit", str(out), "--tasks", *DRY_TASKS)
+        combined = self.root / "combined"
+        self.ce3(
+            "behaviour-combine", "behaviour-combine", str(mined), str(out), "--output-dir", str(combined)
+        )
+        return combined
 
     def attention_check(self) -> None:
         """flash-attention must give sdpa's embeddings; report the speedup that pays for it."""
@@ -304,7 +356,7 @@ class DryRun:
             f"ok  {'attention':<22} speedup x{results['speedup']:.2f}, unpadded={results['auto']['unpadded']}"
         )
 
-    def summary(self, ft_out: Path) -> None:
+    def summary(self, ft_out: Path, kept_vs_base: dict[str, float]) -> None:
         states = sorted(ft_out.glob("checkpoint-*/trainer_state.json"), key=lambda p: int(p.parent.name[11:]))
         perf = (
             [
@@ -322,6 +374,7 @@ class DryRun:
             "ft_samples_per_sec_last": perf[-1] if perf else None,
             "attention": json.loads((self.root / "attention_check.json").read_text()),
             "zero_shot": json.loads((self.root / "mteb" / "zero_shot.json").read_text()),
+            "ft_kept_vs_base": kept_vs_base,
             "hub_repos_created": self.hub_repos,
         }
         (self.root / "dry_run_report.json").write_text(json.dumps(report, indent=2))

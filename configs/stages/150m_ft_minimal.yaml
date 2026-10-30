@@ -1,8 +1,8 @@
 # EXAMPLE starting values; tuned hyperparameters for released models are private.
-# Option A: GTE-ModernBERT -> hard-negative fine-tune on a family-balanced ~2.7M-row subset, no stage 1.
-# Mine with `ce3 mine data/mix_v1 --model Alibaba-NLP/gte-modernbert-base --no-query-prompts
-#   --max-rows-per-source 250000 --output-dir data/mix_v1_gte_mined` (see `make finetune`).
-# Starting points, not tuned values; lr is lower than s2's because the start is already well trained.
+# Option A: GTE-ModernBERT -> hard-negative fine-tune on a family-balanced subset, no stage 1.
+# Justification: default `make mine-gte` uses 25k rows/source with 4 mined negatives (~250k rows total)
+# and `max_seq_length: 512` to cut GPU cost ~16x vs 250k x 7 at 1024 tokens, because GTE-ModernBERT-base
+# is already pretrained. Override with `MINE_ROWS=250000 MINE_NEGS=7` only if dev-suite ablations justify it.
 name: ce3-150m-ft
 model: configs/models/gte-modernbert-150m.yaml
 data_dir: data/mix_v1_gte_mined
@@ -17,6 +17,6 @@ warmup_ratio: 0.05
 temperature: 0.02
 hardness_mode: hard_negatives
 hardness_strength: 5.0
-max_seq_length: 1024
-save_steps: 500
-eval_steps: 500
+max_seq_length: 512
+save_steps: 250
+eval_steps: 250

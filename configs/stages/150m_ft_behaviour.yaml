@@ -1,0 +1,29 @@
+# EXAMPLE starting values; tuned hyperparameters for released models are private.
+# Behaviour pilot: option A (lean 25k/source replay buffer, 4 negatives) plus test-verified near-miss
+# data from CodeContests and SWE-smith patch twins (`make pilot`).
+# Justification for changes vs legacy 2.7M-row / 1024-token config:
+# 1. Replay buffer cut from 250k x 7 negs to 25k x 4 negs (`make mine-gte`): GTE-ModernBERT-base
+#    already scores 71.66 on MTEB(Code) and only needs an anchor replay mix to prevent forgetting,
+#    cutting sequence forward/backward passes by ~16x (~$3 total on 1x RTX 4090).
+# 2. `temperature: 0.015` (down from 0.02): single-edit buggy twins share 90-99% of tokens with the
+#    passing code; a sharper InfoNCE temperature amplifies gradient on the few differing tokens.
+# 3. `max_seq_length: 512` (down from 1024): covers >90% of contest solutions, functions and patch
+#    hunks while cutting attention FLOPs ~2x; ModernBERT's 8k RoPE generalises at inference time.
+name: ce3-150m-ft-behaviour
+model: configs/models/gte-modernbert-150m.yaml
+data_dir: data/mix_v1_gte_behaviour
+dev_suite: data/mix_v1_gte_behaviour
+output_dir: runs/150m/ft_behaviour
+hub_repo: divakantpandey/code-embed-v3-150m-ft-behaviour
+loss: cached_mnrl
+batch_size: 512
+learning_rate: 2.0e-5
+num_train_epochs: 1
+warmup_ratio: 0.05
+temperature: 0.015
+hardness_mode: hard_negatives
+hardness_strength: 5.0
+max_seq_length: 512
+save_steps: 250
+eval_steps: 250
+collapse_guard: 0.5

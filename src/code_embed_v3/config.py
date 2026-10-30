@@ -141,6 +141,12 @@ class StageConfig:
     max_seq_length: int | None = None
     # Training on a source listed in `overlaps_eval` makes mteb flag the model; off unless deliberate.
     allow_eval_overlap: bool = False
+    # Loss multiplier per source name; unlisted sources weigh 1.
+    source_loss_weights: dict[str, float] = field(default_factory=dict)
+    # Stop and fail once the dev score falls below this fraction of the untrained model's; None disables.
+    collapse_guard: float | None = None
+    # Fail when fewer than this fraction of the planned optimizer steps ran; 0 disables.
+    min_step_fraction: float = 0.95
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> StageConfig:

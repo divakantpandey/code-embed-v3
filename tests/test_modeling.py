@@ -8,7 +8,13 @@ import torch
 from transformers import AutoModel
 
 from code_embed_v3.config import ModelConfig
-from code_embed_v3.modeling import build_model, enable_bidirectional_attention, load_model, save_model
+from code_embed_v3.modeling import (
+    build_model,
+    enable_bidirectional_attention,
+    init_model,
+    load_model,
+    save_model,
+)
 from code_embed_v3.prompts import QUERY_PROMPTS
 
 from .conftest import HIDDEN
@@ -71,3 +77,24 @@ def test_bidirectional_survives_save_and_load(tiny_qwen3: Path, tmp_path: Path) 
     save_model(model, tmp_path / "m", cfg)
     after = load_model(tmp_path / "m", device="cpu").encode(texts, convert_to_tensor=True)
     torch.testing.assert_close(before, after, atol=1e-5, rtol=1e-4)
+
+
+def test_fp16_checkpoint_trains_with_fp32_master_weights(tiny_modernbert: Path, tmp_path: Path) -> None:
+    # GTE-ModernBERT ships float16, and transformers loads the checkpoint dtype by default; fp16 master
+    # weights collapsed every fine-tune (AdamW eps underflows, small updates round away).
+    fp16 = tmp_path / "fp16"
+    AutoModel.from_pretrained(tiny_modernbert).half().save_pretrained(fp16)
+    for name in ("tokenizer.json", "tokenizer_config.json", "special_tokens_map.json"):
+        if (tiny_modernbert / name).exists():
+            (fp16 / name).write_bytes((tiny_modernbert / name).read_bytes())
+    assert AutoModel.from_pretrained(fp16).dtype == torch.float16
+
+    cfg = _cfg(fp16)
+    assert {p.dtype for p in build_model(cfg, device="cpu").parameters()} == {torch.float32}
+    saved = tmp_path / "stage1"
+    save_model(build_model(cfg, device="cpu").half(), saved, cfg)
+    assert {p.dtype for p in init_model(cfg, str(saved), device="cpu").parameters()} == {torch.float32}
+    # An explicit choice (the bf16 Qwen configs) is still honoured.
+    assert {p.dtype for p in build_model(_cfg(fp16, torch_dtype="bfloat16"), device="cpu").parameters()} == {
+        torch.bfloat16
+    }

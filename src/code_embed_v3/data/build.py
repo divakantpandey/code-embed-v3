@@ -40,6 +40,11 @@ def build_mix(cfg: DataMixConfig, only: list[str] | None = None) -> Path:
     return out
 
 
+def source_dir(data_dir: str | Path, name: str, meta: dict[str, Any]) -> Path:
+    """A source's data: ``meta["path"]`` when a combined mix points at another mix, else ``data_dir/name``."""
+    return Path(meta["path"]) if meta.get("path") else Path(data_dir) / name
+
+
 def read_manifest(data_dir: str | Path) -> dict[str, Any]:
     return json.loads((Path(data_dir) / MANIFEST).read_text())
 
@@ -69,9 +74,10 @@ def load_mix(
     datasets: dict[str, Dataset] = {}
     families: dict[str, Family] = {}
     for name, meta in manifest["sources"].items():
-        ds = load_from_disk(str(data_dir / name))
+        path = source_dir(data_dir, name, meta)
+        ds = load_from_disk(str(path))
         if not isinstance(ds, Dataset):
-            raise TypeError(f"{data_dir / name} is not a single Dataset")
+            raise TypeError(f"{path} is not a single Dataset")
         if meta["family"] not in QUERY_PROMPTS:
             raise ValueError(f"{name}: unknown family {meta['family']!r} in manifest")
         datasets[name] = ds

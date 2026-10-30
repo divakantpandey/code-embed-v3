@@ -82,14 +82,17 @@ def run(
     from mteb.models.sentence_transformer_wrapper import SentenceTransformerEncoderWrapper
 
     model = load_model(model_path, truncate_dim=truncate_dim)
-    wrapper = SentenceTransformerEncoderWrapper(model, model_prompts=mteb_model_prompts())
+    has_prompts = "nl2code" in getattr(model, "prompts", {})
+    wrapper = SentenceTransformerEncoderWrapper(
+        model, model_prompts=mteb_model_prompts() if has_prompts else None
+    )
     wrapper.mteb_model_meta = wrapper.mteb_model_meta.model_copy(
         update={
             "name": model_name,
             # mteb adds the base model's declared data itself through `adapted_from`.
             "training_datasets": training_datasets_from_manifests(data_dirs or []),
             "adapted_from": base_model,
-            "use_instructions": True,
+            "use_instructions": has_prompts,
             "license": "apache-2.0",
             "open_weights": True,
         }

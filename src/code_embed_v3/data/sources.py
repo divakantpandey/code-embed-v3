@@ -9,6 +9,7 @@ from __future__ import annotations
 import difflib
 import json
 import random
+import re
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -120,6 +121,56 @@ def load_code_contests_xlang(src: SourceConfig) -> Iterator[Row]:
         for _ in range(per_problem):
             la, lb = rng.sample(langs, 2)
             yield {"anchor": rng.choice(by_lang[la]), "positive": rng.choice(by_lang[lb])}
+
+
+_HUNK = re.compile(r"@@ -(\S+) \+(\S+) @@")
+
+
+def reverse_patch(patch: str) -> str:
+    """Invert a unified diff, keeping each change block in ``-`` then ``+`` order."""
+    out: list[str] = []
+    removed: list[str] = []
+    added: list[str] = []
+    old_path = ""
+    # Inside a hunk a removed "-- x" reads as "--- x", so file headers only count between hunks.
+    in_hunk = False
+
+    def flush() -> None:
+        out.extend(removed + added)
+        removed.clear()
+        added.clear()
+
+    for line in patch.splitlines():
+        if line.startswith("diff "):
+            flush()
+            in_hunk = False
+            out.append(line)
+        elif not in_hunk and line.startswith("--- "):
+            old_path = line[4:]
+        elif not in_hunk and line.startswith("+++ "):
+            out.extend(["--- " + line[4:], "+++ " + old_path])
+        elif line.startswith("@@ "):
+            flush()
+            in_hunk = True
+            out.append(_HUNK.sub(lambda m: f"@@ -{m[2]} +{m[1]} @@", line, count=1))
+        elif line.startswith("+"):
+            removed.append("-" + line[1:])
+        elif line.startswith("-"):
+            added.append("+" + line[1:])
+        else:
+            flush()
+            out.append(line)
+    flush()
+    return "\n".join(out) + "\n"
+
+
+@register("swe_smith")
+def load_swe_smith(src: SourceConfig) -> Iterator[Row]:
+    """Issue -> fixing patch. SWE-smith's ``patch`` injects the bug, so it is reversed into the fix."""
+    for row in _load(src):
+        stmt = (row["problem_statement"] or "").strip()
+        if stmt and row["patch"]:
+            yield {"anchor": stmt, "positive": reverse_patch(row["patch"])}
 
 
 @register("beir")

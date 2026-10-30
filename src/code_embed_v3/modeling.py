@@ -93,8 +93,7 @@ def build_model(cfg: ModelConfig, device: str | None = None) -> SentenceTransfor
         attn = resolve_attn(cfg.attn_implementation)
     if attn:
         model_kwargs["attn_implementation"] = attn
-    if cfg.torch_dtype:
-        model_kwargs["dtype"] = cfg.torch_dtype
+    model_kwargs["dtype"] = training_dtype(cfg)
 
     transformer = Transformer(cfg.backbone, max_seq_length=cfg.max_seq_length, model_kwargs=model_kwargs)
     if cfg.bidirectional:
@@ -143,7 +142,12 @@ def load_model(
     bidirectional = meta_path.exists() and bool(json.loads(meta_path.read_text()).get("bidirectional"))
     attn = resolve_attn(attn_implementation) if not bidirectional else None
     if attn:
-        kwargs["model_kwargs"] = {**kwargs.get("model_kwargs", {}), "attn_implementation": attn}
+        model_kwargs = {**kwargs.get("model_kwargs", {}), "attn_implementation": attn}
+        # flash-attention only takes fp16/bf16, and this repo saves fp32 checkpoints; training callers pass
+        # dtype=float32 explicitly and run under autocast.
+        if attn == "flash_attention_2":
+            model_kwargs.setdefault("dtype", "bfloat16")
+        kwargs["model_kwargs"] = model_kwargs
     model = SentenceTransformer(str(path), device=device, **kwargs)
     if bidirectional:
         transformer = model[0]
@@ -153,8 +157,20 @@ def load_model(
     return model
 
 
+def training_dtype(cfg: ModelConfig) -> str:
+    """Master-weight dtype. Never the checkpoint's: transformers loads that by default, and
+    GTE-ModernBERT ships float16, where AdamW's eps underflows and lr-sized updates round away; the
+    first dry-run collapsed to random from exactly that. bf16 autocast still runs the compute."""
+    return cfg.torch_dtype or "float32"
+
+
 def init_model(cfg: ModelConfig, init_from: str | None, device: str | None = None) -> SentenceTransformer:
     """Start a stage either from the raw backbone or from a previous stage's checkpoint."""
     if init_from is None:
         return build_model(cfg, device=device)
-    return load_model(init_from, device=device, attn_implementation=cfg.attn_implementation)
+    return load_model(
+        init_from,
+        device=device,
+        attn_implementation=cfg.attn_implementation,
+        model_kwargs={"dtype": training_dtype(cfg)},
+    )
