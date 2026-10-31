@@ -416,7 +416,9 @@ def test_behaviour_combine_drops_replay_rows_sharing_a_dev_anchor(tmp_path: Path
 
     out = tmp_path / "combined"
     _cmd_behaviour_combine(
-        SimpleNamespace(data_dirs=[str(replay), str(tmp_path / "behaviour")], output_dir=str(out))
+        SimpleNamespace(
+            data_dirs=[str(replay), str(tmp_path / "behaviour")], output_dir=str(out), behaviour_share=None
+        )
     )
     sources = json.loads((out / MANIFEST).read_text())["sources"]
     assert sources["swe_smith"]["rows"] == 2 and sources["swe_smith"]["dev_anchor_rows_dropped"] == 1
@@ -427,6 +429,36 @@ def test_behaviour_combine_drops_replay_rows_sharing_a_dev_anchor(tmp_path: Path
     )
     assert not list((replay / "swe_smith").glob("cache-*"))
     assert (out / DEV_DIR / "behaviour_swe_twins").exists()
+
+
+@pytest.mark.parametrize(("replay_rows", "share", "expect"), [(90, 0.25, (90, 30)), (10, 0.5, (8, 8))])
+def test_behaviour_combine_holds_the_behaviour_share(
+    tmp_path: Path, replay_rows: int, share: float, expect: tuple[int, int]
+) -> None:
+    """Whichever side is over the target is subsampled; the other is kept whole."""
+    from datasets import Dataset, load_from_disk
+
+    from code_embed_v3.cli import _cmd_behaviour_combine
+
+    for name, n in (("replay", replay_rows), ("behaviour", 8 if replay_rows == 10 else 40)):
+        Dataset.from_dict({"anchor": [f"{name} {i}" for i in range(n)], "positive": ["p"] * n}).save_to_disk(
+            str(tmp_path / name / name)
+        )
+        (tmp_path / name / MANIFEST).write_text(
+            json.dumps({"sources": {name: {"family": "nl2code", "rows": n, "audited": True}}})
+        )
+    out = tmp_path / "combined"
+    _cmd_behaviour_combine(
+        SimpleNamespace(
+            data_dirs=[str(tmp_path / "replay"), str(tmp_path / "behaviour")],
+            output_dir=str(out),
+            behaviour_share=share,
+        )
+    )
+    sources = json.loads((out / MANIFEST).read_text())["sources"]
+    got = (sources["replay"]["rows"], sources["behaviour"]["rows"])
+    assert got == expect
+    assert len(set(load_from_disk(sources["behaviour"]["path"])["anchor"])) == got[1]
 
 
 def test_eval_scores_every_model_at_one_length(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -9,6 +9,10 @@
 #    passing code; a sharper InfoNCE temperature amplifies gradient on the few differing tokens.
 # 3. `max_seq_length: 512` (down from 1024): covers >90% of contest solutions, functions and patch
 #    hunks while cutting attention FLOPs ~2x; ModernBERT's 8k RoPE generalises at inference time.
+# 4. `batch_size: 128` (down from 512): the behaviour effect was measured at batch 16 with an 11% behaviour
+#    share (`--behaviour-share 0.11` in `make pilot`). Each batch is drawn from one source and partial
+#    batches are dropped, so at 512 the small contest sources barely train; GradCache keeps the compute
+#    per row the same, and 128 gives 4x the optimizer steps.
 name: ce3-150m-ft-behaviour
 model: configs/models/gte-modernbert-150m.yaml
 data_dir: data/mix_v1_gte_behaviour
@@ -16,7 +20,7 @@ dev_suite: data/mix_v1_gte_behaviour
 output_dir: runs/150m/ft_behaviour
 hub_repo: divakantpandey/code-embed-v3-150m-ft-behaviour
 loss: cached_mnrl
-batch_size: 512
+batch_size: 128
 learning_rate: 2.0e-5
 num_train_epochs: 1
 warmup_ratio: 0.05

@@ -72,6 +72,8 @@ class DryRun:
             logging_steps=1,
             # The dry-run audits against DRY_TASKS only; its models are never released.
             audit_scope="any",
+            # Its 40-problem behaviour sources fill one or two batches; enough to exercise the pipeline.
+            min_batches_per_source=0,
             **overrides,
         )
         if raw["hub_repo"]:

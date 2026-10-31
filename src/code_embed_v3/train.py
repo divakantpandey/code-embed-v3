@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import time
+from collections.abc import Mapping, Sized
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -335,6 +336,22 @@ def per_device_batch_size(stage: StageConfig) -> int:
     return stage.batch_size // ws
 
 
+def check_source_batches(datasets: Mapping[str, Sized], stage: StageConfig) -> None:
+    """Refuses sources too small to fill ``stage.min_batches_per_source`` global batches."""
+    if stage.min_batches_per_source <= 0:
+        return
+    short = {
+        name: len(ds)
+        for name, ds in datasets.items()
+        if len(ds) // stage.batch_size < stage.min_batches_per_source
+    }
+    if short:
+        raise TrainingShortfall(
+            f"sources with fewer than {stage.min_batches_per_source} batches of {stage.batch_size} rows "
+            f"(rows: {short}) would train little or not at all; lower batch_size, grow or drop them"
+        )
+
+
 def dataloader_workers(stage: StageConfig) -> int:
     if stage.dataloader_num_workers is not None:
         return stage.dataloader_num_workers
@@ -418,6 +435,7 @@ def run_stage(
         allow_eval_overlap=stage.allow_eval_overlap,
         audited_against=full_audit_tasks() if stage.audit_scope == "full" else (),
     )
+    check_source_batches(train_dataset, stage)
     evaluator = build_dev_evaluator(stage.dev_suite) if stage.dev_suite else None
     if stage.mini_batch_size != "auto":
         mini_batch = stage.mini_batch_size

@@ -153,6 +153,9 @@ class StageConfig:
     collapse_guard: float | None = None
     # Fail when fewer than this fraction of the planned optimizer steps ran; 0 disables.
     min_step_fraction: float = 0.95
+    # Each batch comes from one source and partial batches are dropped, so a source smaller than one
+    # batch never trains and a source of one or two batches barely does; fail instead. 0 disables.
+    min_batches_per_source: int = 3
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> StageConfig:

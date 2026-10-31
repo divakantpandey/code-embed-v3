@@ -154,6 +154,19 @@ def test_sampler_starvation_fails_the_stage(tmp_path: Path, tiny_modernbert: Pat
     assert not (tmp_path / "out" / "final").exists()
 
 
+def test_source_too_small_for_its_batches_fails_the_stage(tmp_path: Path, tiny_modernbert: Path) -> None:
+    """32 rows at batch 16 is 2 batches; dropped partial batches would silently starve such a source."""
+    data = write_mix(tmp_path / "data")
+    model_yaml = _model_yaml(tmp_path, tiny_modernbert)
+    stage = _stage(tmp_path / "a", model_yaml, data, batch_size=16, mini_batch_size=4)
+    with pytest.raises(TrainingShortfall, match=r"fewer than 3 batches of 16 rows \(rows: \{'toy': 32\}\)"):
+        run_stage(stage, device="cpu")
+    stage = _stage(
+        tmp_path / "b", model_yaml, data, batch_size=16, mini_batch_size=4, min_batches_per_source=2
+    )
+    assert (run_stage(stage, device="cpu") / "modules.json").exists()
+
+
 def test_final_model_keeps_full_context_not_training_length(tmp_path: Path, tiny_modernbert: Path) -> None:
     """Trained at 32 tokens; saved at the backbone's 128 positions, or the configured override."""
     data = write_mix(tmp_path / "d")

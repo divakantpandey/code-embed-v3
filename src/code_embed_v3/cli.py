@@ -367,6 +367,10 @@ def _cmd_behaviour_combine(a: argparse.Namespace) -> None:
 
     Inputs can share anchors (SWE-smith issues sit in both the replay mix and the behaviour twins),
     so train rows whose anchor is any input's dev anchor are dropped into a filtered copy.
+
+    With ``--behaviour-share``, sources of every input after the first (the behaviour data) are brought
+    to that fraction of train rows by subsampling whichever side is over it. The effect was measured at
+    an 11% share; a much larger replay buffer silently dilutes it.
     """
     import shutil
 
@@ -383,32 +387,55 @@ def _cmd_behaviour_combine(a: argparse.Namespace) -> None:
             dev = Path(d) / DEV_DIR / name
             if dev.exists():
                 held.update(load_from_disk(str(dev))["anchor"])
-    combined: dict[str, Any] = {"sources": {}}
+    loaded: dict[str, tuple[str, dict[str, Any], Path, Dataset, Dataset]] = {}
     for d, sources in manifests.items():
         for name, meta in sources.items():
-            if name in combined["sources"]:
+            if name in loaded:
                 raise ValueError(f"source {name} appears in more than one input")
             path = source_dir(d, name, meta).resolve()
             ds = load_from_disk(str(path))
             if not isinstance(ds, Dataset):
                 raise TypeError(f"{path} is not a single Dataset")
             kept = ds.filter(lambda r: r["anchor"] not in held, keep_in_memory=True)
-            entry = {**meta, "path": str(path)}
             if len(kept) < len(ds):
-                if (out / name).exists():
-                    shutil.rmtree(out / name)
-                kept.save_to_disk(str(out / name))
-                entry.update(
-                    path=str((out / name).resolve()),
-                    rows=len(kept),
-                    dev_anchor_rows_dropped=len(ds) - len(kept),
-                )
                 print(f"{name}: dropped {len(ds) - len(kept)} rows sharing a dev anchor")
-            combined["sources"][name] = entry
-            dev = Path(d) / DEV_DIR / name
-            if dev.exists() and not (out / DEV_DIR / name).exists():
-                shutil.copytree(dev, out / DEV_DIR / name)
+            loaded[name] = (d, meta, path, ds, kept)
+    replay_dir = a.data_dirs[0]
+    replay = sum(len(v[4]) for v in loaded.values() if v[0] == replay_dir)
+    behaviour = sum(len(v[4]) for v in loaded.values() if v[0] != replay_dir)
+    scale = dict.fromkeys(a.data_dirs, 1.0)
+    share = a.behaviour_share
+    if share is not None and replay and behaviour:
+        if behaviour / (replay + behaviour) > share:
+            for d in a.data_dirs[1:]:
+                scale[d] = share * replay / (1 - share) / behaviour
+        else:
+            scale[replay_dir] = (1 - share) * behaviour / share / replay
+    combined: dict[str, Any] = {"sources": {}}
+    rows: dict[str, int] = {}
+    for name, (d, meta, path, ds, kept) in loaded.items():
+        entry = {**meta, "path": str(path)}
+        if len(kept) < len(ds):
+            entry["dev_anchor_rows_dropped"] = len(ds) - len(kept)
+        if scale[d] < 1:
+            entry["subsampled_from"] = len(kept)
+            kept = kept.shuffle(seed=0).select(range(round(len(kept) * scale[d])))
+        if len(kept) < len(ds):
+            if (out / name).exists():
+                shutil.rmtree(out / name)
+            kept.save_to_disk(str(out / name))
+            entry.update(path=str((out / name).resolve()), rows=len(kept))
+        combined["sources"][name] = entry
+        rows[name] = len(kept)
+        dev = Path(d) / DEV_DIR / name
+        if dev.exists() and not (out / DEV_DIR / name).exists():
+            shutil.copytree(dev, out / DEV_DIR / name)
     write_manifest(out, combined)
+    total = sum(rows.values())
+    for name, n in rows.items():
+        print(f"{name}: {n} rows ({n / total:.1%})")
+    behaviour_rows = sum(n for name, n in rows.items() if loaded[name][0] != replay_dir)
+    print(f"behaviour share: {behaviour_rows / total:.1%} of {total} train rows")
     print(out)
 
 
@@ -765,6 +792,11 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("behaviour-combine", help="one mix that references several built mixes in place")
     s.add_argument("data_dirs", nargs="+")
     s.add_argument("--output-dir", required=True)
+    s.add_argument(
+        "--behaviour-share",
+        type=float,
+        help="target fraction of train rows from inputs after the first; subsamples the side over it",
+    )
     s.set_defaults(fn=_cmd_behaviour_combine)
 
     s = sub.add_parser("behaviour-eval", help="ExecRetrieval exec@1 and CoQuIR pairwise accuracy")

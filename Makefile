@@ -69,6 +69,8 @@ MINE_NEGS ?= 4
 MUTANTS ?= 6
 REWRITES ?= 2
 SWE_ROWS ?= 5000
+# Fraction of train rows from behaviour data; the effect was measured at 11% (RESEARCH_LOG R8/R9).
+BEH_SHARE ?= 0.11
 
 # --- Option A: fine-tune GTE-ModernBERT, no pretraining ---
 mine-gte:
@@ -86,7 +88,7 @@ pilot: mine-gte
 	uv run ce3 behaviour-build --out-dir $(B) --max-problems 5000 \
 		--mutants $(MUTANTS) --rewrites $(REWRITES) --swe-smith-rows $(SWE_ROWS)
 	uv run ce3 audit $(B)
-	uv run ce3 behaviour-combine data/mix_v1_gte_mined $(B) --output-dir data/mix_v1_gte_behaviour
+	uv run ce3 behaviour-combine data/mix_v1_gte_mined $(B) --output-dir data/mix_v1_gte_behaviour --behaviour-share $(BEH_SHARE)
 	uv run ce3 zero-shot data/mix_v1_gte_behaviour --base-model $(GTE)
 	uv run ce3 train $(call cfg,configs/stages/150m_ft_behaviour.yaml)
 	uv run ce3 behaviour-eval $(GTE) --out results/behaviour/gte.json
