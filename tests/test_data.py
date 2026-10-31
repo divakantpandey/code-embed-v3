@@ -169,6 +169,19 @@ def test_audit_handles_a_hit_after_a_hit_free_writer_batch() -> None:
     assert len(kept) == 1199 and counts == {"CosQA": 1}
 
 
+def test_parallel_audit_matches_serial_and_does_not_pickle_the_index() -> None:
+    idx = EvalIndex()
+    idx.add("CosQA", LONG)
+    # dill cannot pickle a generator: the audit fails if it ships the index to workers instead of forking it.
+    idx.unpicklable = (x for x in [])  # type: ignore[attr-defined]
+    anchors = [f"unrelated query {i}" for i in range(400)]
+    anchors[350] = LONG
+    ds = Dataset.from_dict({"anchor": anchors, "positive": ["p"] * 400})
+    kept, counts = audit_dataset(ds, idx, num_proc=2)
+    assert len(kept) == 399 and counts == {"CosQA": 1}
+    assert contamination._AUDIT_INDEX is None
+
+
 def test_parallel_index_matches_serial(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(contamination, "PARALLEL_CHUNK", 2)
     texts = [f"def f{i}(x): return x * {i} + {i % 3} if x else None  # variant {i}" for i in range(40)] + [

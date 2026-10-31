@@ -132,21 +132,44 @@ def index_texts(texts: dict[str, list[str]], index: EvalIndex, num_proc: int = 1
     return index
 
 
+# The index of a running audit, inherited by forked map workers. Capturing it in the mapped function
+# instead makes `datasets` pickle the whole index (~360k MinHashes) once per worker and per call: minutes
+# of single-core serialising and a full copy in every worker's RAM.
+_AUDIT_INDEX: EvalIndex | None = None
+
+
+def _flag(row: dict[str, Any], text_cols: list[str]) -> dict[str, Any]:
+    if _AUDIT_INDEX is None:
+        raise RuntimeError("audit index missing in this worker; workers must be forked")
+    tasks: set[str] = set()
+    for c in text_cols:
+        tasks |= _AUDIT_INDEX.hits(row[c])
+    return {"_hits": sorted(tasks)}
+
+
 def audit_dataset(ds: Dataset, index: EvalIndex, num_proc: int = 1) -> tuple[Dataset, Counter[str]]:
     """Drop every row whose any text column hits the eval index; return kept rows and hits per task."""
+    import multiprocess
+
+    global _AUDIT_INDEX
     text_cols = [c for c in ds.column_names if c == "anchor" or c == "positive" or c.startswith("negative_")]
-
-    def flag(row: dict[str, Any]) -> dict[str, Any]:
-        tasks: set[str] = set()
-        for c in text_cols:
-            tasks |= index.hits(row[c])
-        return {"_hits": sorted(tasks)}
-
+    if num_proc > 1 and multiprocess.get_start_method() != "fork":
+        num_proc = 1
     # Declared, not inferred: a writer batch without any hit would type `_hits` as list<null> and the
     # next batch with a hit would fail to cast.
     features = ds.features.copy()
     features["_hits"] = List(Value("string"))
-    flagged = ds.map(flag, num_proc=num_proc, features=features, desc="contamination audit")
+    _AUDIT_INDEX = index
+    try:
+        flagged = ds.map(
+            _flag,
+            fn_kwargs={"text_cols": text_cols},
+            num_proc=num_proc,
+            features=features,
+            desc="contamination audit",
+        )
+    finally:
+        _AUDIT_INDEX = None
     counts: Counter[str] = Counter(t for hits in flagged["_hits"] for t in hits)
     kept = flagged.filter(lambda r: not r["_hits"], num_proc=num_proc).remove_columns("_hits")
     return kept, counts
