@@ -6,6 +6,7 @@ import importlib.util
 import logging
 import os
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Protocol, TypedDict
 
@@ -165,6 +166,52 @@ def clip_to_teacher_window(ds: Dataset, tokenizer: PreTrainedTokenizerBase) -> D
     return ds.map(clip_batch, batched=True)
 
 
+def label_sources(
+    sources: Mapping[str, tuple[Dataset, Family, Path]],
+    scorer: ShardScorer,
+    shard_rows: int = 20_000,
+) -> dict[str, Dataset]:
+    """Add ``label`` = [s(q, pos), s(q, neg_1), ...] (teacher log-odds) as DistillKLDivLoss expects.
+
+    ``sources`` maps a name to (mined dataset, family, output path). Every source's pending shards go
+    to the scorer in one call, so a vLLM teacher starts once per run rather than once per source
+    (each start-up costs about a minute). Scores land in ``<out>.shards/``; a restart only scores
+    shards without a finished ``.npy``, so a lost pod costs at most one shard per GPU.
+    """
+    pending: list[ScoreJob] = []
+    plans: dict[str, tuple[list[str], Path, int]] = {}
+    for name, (ds, family, out) in sources.items():
+        cols = doc_columns(ds)
+        shard_dir = out.with_name(out.name + ".shards")
+        shard_dir.mkdir(parents=True, exist_ok=True)
+        starts = list(range(0, len(ds), shard_rows))
+        todo = 0
+        for i, start in enumerate(starts):
+            npy = shard_dir / f"{i:05d}.npy"
+            if npy.is_file():
+                continue
+            parquet = shard_dir / f"{i:05d}.parquet"
+            ds.select(range(start, min(start + shard_rows, len(ds)))).select_columns(
+                ["anchor", *cols]
+            ).to_parquet(str(parquet))
+            pending.append(
+                ScoreJob(input=str(parquet), output=str(npy), instruction=TEACHER_INSTRUCTIONS[family])
+            )
+            todo += 1
+        logger.info("%s: %d/%d shards to score", name, todo, len(starts))
+        plans[name] = (cols, shard_dir, len(starts))
+    if pending:
+        scorer(pending)
+    labelled = {}
+    for name, (ds, _, _) in sources.items():
+        cols, shard_dir, n_shards = plans[name]
+        scores = np.concatenate([np.load(shard_dir / f"{i:05d}.npy") for i in range(n_shards)])
+        if scores.shape != (len(ds), len(cols)):
+            raise ValueError(f"{name}: scores {scores.shape} do not match {(len(ds), len(cols))}")
+        labelled[name] = ds.add_column("label", scores.tolist())
+    return labelled
+
+
 def label_source(
     ds: Dataset,
     scorer: ShardScorer,
@@ -172,34 +219,8 @@ def label_source(
     out: Path,
     shard_rows: int = 20_000,
 ) -> Dataset:
-    """Add ``label`` = [s(q, pos), s(q, neg_1), ...] (teacher log-odds) as DistillKLDivLoss expects.
-
-    Work is split into shards whose scores land in ``<out>.shards/``; a restart only scores the
-    shards without a finished ``.npy``, so a lost pod costs at most one shard per GPU.
-    """
-    cols = doc_columns(ds)
-    shard_dir = out.with_name(out.name + ".shards")
-    shard_dir.mkdir(parents=True, exist_ok=True)
-    starts = list(range(0, len(ds), shard_rows))
-    pending: list[ScoreJob] = []
-    for i, start in enumerate(starts):
-        npy = shard_dir / f"{i:05d}.npy"
-        if npy.is_file():
-            continue
-        parquet = shard_dir / f"{i:05d}.parquet"
-        ds.select(range(start, min(start + shard_rows, len(ds)))).select_columns(
-            ["anchor", *cols]
-        ).to_parquet(str(parquet))
-        pending.append(
-            ScoreJob(input=str(parquet), output=str(npy), instruction=TEACHER_INSTRUCTIONS[family])
-        )
-    logger.info("%s: %d/%d shards to score", out.name, len(pending), len(starts))
-    if pending:
-        scorer(pending)
-    scores = np.concatenate([np.load(shard_dir / f"{i:05d}.npy") for i in range(len(starts))])
-    if scores.shape != (len(ds), len(cols)):
-        raise ValueError(f"{out.name}: scores {scores.shape} do not match {(len(ds), len(cols))}")
-    return ds.add_column("label", scores.tolist())
+    """``label_sources`` for a single source."""
+    return label_sources({out.name: (ds, family, out)}, scorer, shard_rows)[out.name]
 
 
 def finish_shards(out: Path) -> None:

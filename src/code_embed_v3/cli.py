@@ -159,7 +159,7 @@ def _cmd_label(a: argparse.Namespace) -> None:
     from code_embed_v3.data.mining import (
         finish_shards,
         is_saved_dataset,
-        label_source,
+        label_sources,
         load_dataset_dir,
         save_dataset_atomic,
     )
@@ -169,6 +169,7 @@ def _cmd_label(a: argparse.Namespace) -> None:
     out = Path(a.output_dir)
     out.mkdir(parents=True, exist_ok=True)
     out_manifest: dict[str, Any] = read_manifest(out) if (out / "manifest.json").exists() else {"sources": {}}
+    todo = {}
     for name, meta in manifest["sources"].items():
         if is_saved_dataset(out / name) and name in out_manifest["sources"]:
             print(f"{name}: already labelled")
@@ -176,7 +177,9 @@ def _cmd_label(a: argparse.Namespace) -> None:
         ds = load_dataset_dir(Path(a.data_dir) / name)
         if a.max_rows_per_source is not None:
             ds = ds.select(range(min(a.max_rows_per_source, len(ds))))
-        labelled = label_source(ds, scorer, meta["family"], out / name, shard_rows=a.shard_rows)
+        todo[name] = (ds, meta["family"], out / name)
+    for name, labelled in label_sources(todo, scorer, shard_rows=a.shard_rows).items():
+        meta = manifest["sources"][name]
         save_dataset_atomic(labelled, out / name)
         finish_shards(out / name)
         out_manifest["sources"][name] = {
@@ -205,6 +208,7 @@ def _cmd_label_check(a: argparse.Namespace) -> None:
         clip_to_teacher_window,
         crossencoder_scorer,
         label_source,
+        label_sources,
         load_dataset_dir,
         vllm_scorer,
     )
@@ -226,10 +230,13 @@ def _cmd_label_check(a: argparse.Namespace) -> None:
     gc.collect()
     torch.cuda.empty_cache()
     fast = vllm_scorer(a.teacher, num_gpus=max(1, torch.cuda.device_count()))
+    vllm_labels = label_sources(
+        {name: (ds, family, work / "vllm" / name) for name, (ds, family) in samples.items()}, fast
+    )
     report: dict[str, dict[str, float]] = {}
-    for name, (ds, family) in samples.items():
+    for name in samples:
         ref = refs[name]
-        vll = np.asarray(label_source(ds, fast, family, work / "vllm" / name)["label"])
+        vll = np.asarray(vllm_labels[name]["label"])
         rho = float(spearmanr(ref.ravel(), vll.ravel()).statistic)
         report[name] = {"spearman": rho, "max_abs_diff": float(np.abs(ref - vll).max())}
         print(f"{name}: {report[name]}")
