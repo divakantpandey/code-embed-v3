@@ -20,7 +20,8 @@ import pyarrow.parquet as pq
 from vllm import LLM, PoolingParams
 
 # vLLM's examples/pooling/score/template/qwen3_reranker.jinja with the instruction inlined, matching the
-# Qwen3-Reranker model card prompt.
+# Qwen3-Reranker model card prompt. The score is read at the last token, which the model card makes
+# "</think>\n\n"; chat-template rendering drops one trailing newline, hence three here.
 TEMPLATE = (
     "<|im_start|>system\n"
     "Judge whether the Document meets the requirements based on the Query and the Instruct provided. "
@@ -30,7 +31,7 @@ TEMPLATE = (
     '<Query>: {{ messages | selectattr("role", "eq", "query") | map(attribute="content") | first }}\n'
     '<Document>: {{ messages | selectattr("role", "eq", "document") | map(attribute="content") | first }}'
     "<|im_end|>\n"
-    "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    "<|im_start|>assistant\n<think>\n\n</think>\n\n\n"
 )
 
 # The original checkpoints are causal LMs; this turns the yes/no logits into one classifier output.

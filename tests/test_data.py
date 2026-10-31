@@ -340,3 +340,24 @@ def test_label_check_clips_both_backends_to_the_teacher_window() -> None:
     assert [len(t.split()) for t in out["anchor"]] == [TEACHER_MAX_QUERY_TOKENS, 2]
     assert [len(t.split()) for t in out["positive"]] == [TEACHER_MAX_DOC_TOKENS, 1]
     assert [len(t.split()) for t in out["negative_1"]] == [1, TEACHER_MAX_DOC_TOKENS]
+
+
+def test_vllm_teacher_prompt_ends_like_the_model_card() -> None:
+    """The worker imports vllm, so read its template from the source instead of importing it."""
+    import ast
+
+    from jinja2.sandbox import ImmutableSandboxedEnvironment
+
+    src = Path(__file__).parents[1] / "src" / "code_embed_v3" / "data" / "vllm_teacher.py"
+    node = next(
+        n
+        for n in ast.parse(src.read_text()).body
+        if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", None) == "TEMPLATE"
+    )
+    template = ast.literal_eval(node.value).replace("@@INSTRUCTION@@", "i")
+    # Same environment transformers' apply_chat_template uses, which vLLM renders through.
+    env = ImmutableSandboxedEnvironment(trim_blocks=True, lstrip_blocks=True)
+    messages = [{"role": "query", "content": "q"}, {"role": "document", "content": "d"}]
+    rendered = env.from_string(template).render(messages=messages)
+    assert rendered.endswith("<|im_start|>assistant\n<think>\n\n</think>\n\n")
+    assert not rendered.endswith("\n\n\n")
