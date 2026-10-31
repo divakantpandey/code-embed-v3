@@ -36,6 +36,10 @@ def main() -> None:
     # No per-request seed: several rows can carry the same prompt (k variants of one snippet), and a
     # fixed per-request seed would make them identical. The engine seed keeps runs reproducible.
     params = SamplingParams(temperature=a.temperature, top_p=0.95, max_tokens=a.max_tokens)
+    tokenizer = llm.get_tokenizer()
+    # vLLM rejects the whole batch when one prompt exceeds the context; such rows get an empty reply,
+    # which callers already reject as unparsable, so replies stay aligned with input rows.
+    prompt_limit = a.max_model_len - a.max_tokens
 
     for job in json.loads(Path(a.jobs).read_text()):
         out = Path(job["output"])
@@ -46,13 +50,29 @@ def main() -> None:
             [{"role": "system", "content": s}, {"role": "user", "content": u}]
             for s, u in zip(rows["system"], rows["user"], strict=True)
         ]
-        outputs = llm.chat(conversations, params, use_tqdm=False)
+        fits = [
+            len(
+                tokenizer.encode(
+                    tokenizer.apply_chat_template(c, tokenize=False, add_generation_prompt=True),
+                    add_special_tokens=False,
+                )
+            )
+            <= prompt_limit
+            for c in conversations
+        ]
+        outputs = iter(
+            llm.chat([c for c, ok in zip(conversations, fits, strict=True) if ok], params, use_tqdm=False)
+        )
         tmp = out.with_name(out.name + ".tmp")
         with tmp.open("w") as fh:
-            for o in outputs:
-                fh.write(json.dumps({"text": o.outputs[0].text}) + "\n")
+            for ok in fits:
+                fh.write(json.dumps({"text": next(outputs).outputs[0].text if ok else ""}) + "\n")
         os.replace(tmp, out)
-        print(f"generated {out.name}: {len(outputs)} replies", flush=True)
+        print(
+            f"generated {out.name}: {len(fits)} replies, "
+            f"{fits.count(False)} prompts over {prompt_limit} tokens skipped",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":
