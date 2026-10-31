@@ -157,6 +157,16 @@ def load_model(
     return model
 
 
+def inference_length(model: SentenceTransformer, cfg: ModelConfig) -> int:
+    """``cfg.inference_max_seq_length``, else the backbone's position limit."""
+    if cfg.inference_max_seq_length is not None:
+        return cfg.inference_max_seq_length
+    transformer = model[0]
+    if not isinstance(transformer, Transformer):
+        raise TypeError(f"first module is {type(transformer).__name__}, expected Transformer")
+    return int(transformer.auto_model.config.max_position_embeddings)
+
+
 def training_dtype(cfg: ModelConfig) -> str:
     """Master-weight dtype. Never the checkpoint's: transformers loads that by default, and
     GTE-ModernBERT ships float16, where AdamW's eps underflows and lr-sized updates round away; the

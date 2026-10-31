@@ -38,7 +38,7 @@ from code_embed_v3.config import ModelConfig, StageConfig
 from code_embed_v3.data.build import MANIFEST, load_mix
 from code_embed_v3.env import available_cpus
 from code_embed_v3.eval.dev_suite import build_dev_evaluator
-from code_embed_v3.modeling import META_FILE, init_model, model_meta, save_model
+from code_embed_v3.modeling import META_FILE, inference_length, init_model, model_meta, save_model
 from code_embed_v3.prompts import training_prompts
 
 logger = logging.getLogger(__name__)
@@ -386,6 +386,9 @@ def _save_final(model: SentenceTransformer, final: Path, model_cfg: ModelConfig)
     tmp = final.with_name(final.name + ".tmp")
     if tmp.exists():
         shutil.rmtree(tmp)
+    # The stage's training length would otherwise ship as the model's limit, cutting long code that the
+    # base handles (the first dry-run's Defects4J "regression" was exactly that 256-token cut).
+    model.max_seq_length = inference_length(model, model_cfg)
     save_model(model, tmp, model_cfg)
     if final.exists():
         shutil.rmtree(final)

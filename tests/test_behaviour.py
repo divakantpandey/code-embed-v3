@@ -427,3 +427,36 @@ def test_behaviour_combine_drops_replay_rows_sharing_a_dev_anchor(tmp_path: Path
     )
     assert not list((replay / "swe_smith").glob("cache-*"))
     assert (out / DEV_DIR / "behaviour_swe_twins").exists()
+
+
+def test_eval_scores_every_model_at_one_length(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A checkpoint saved at its training length must not be scored on cut text against a full-length base."""
+    queries = [{"query": "q", "correct_corpus_ids": ["c1"], "paired_distractor_corpus_ids": ["c2"]}]
+    monkeypatch.setattr(behaviour_eval, "load_exec_retrieval", lambda: (queries, {"c1": "a", "c2": "b"}))
+    monkeypatch.setattr(
+        behaviour_eval,
+        "load_coquir",
+        lambda _: (
+            {"q": "q"},
+            {"g": "good", "b": "bad"},
+            [{"qid": "q", "pos-docids": ["g"], "neg-docids": ["b"]}],
+        ),
+    )
+
+    class Model:
+        def __init__(self) -> None:
+            self.prompts: dict[str, str] = {}
+            self.max_seq_length = 256
+            self.seen: list[int] = []
+
+        def encode(self, texts: list[str], **_: Any) -> np.ndarray:
+            self.seen.append(self.max_seq_length)
+            return np.eye(len(texts), 4)
+
+    model = Model()
+    out = behaviour_eval.evaluate(model, subsets=("Defects4J",))
+    assert out["max_seq_length"] == behaviour_eval.EVAL_MAX_SEQ_LENGTH == 8192
+    assert set(model.seen) == {8192}
+    assert (
+        behaviour_eval.evaluate(Model(), subsets=("Defects4J",), max_seq_length=None)["max_seq_length"] == 256
+    )

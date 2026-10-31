@@ -16,7 +16,7 @@ from code_embed_v3.train import TrainingCollapsed, TrainingShortfall, WeightedLo
 from .conftest import HIDDEN, write_mix
 
 
-def _model_yaml(tmp: Path, backbone: Path, bidirectional: bool = False) -> Path:
+def _model_yaml(tmp: Path, backbone: Path, bidirectional: bool = False, **kw: object) -> Path:
     p = tmp / "model.yaml"
     p.write_text(
         yaml.safe_dump(
@@ -26,6 +26,7 @@ def _model_yaml(tmp: Path, backbone: Path, bidirectional: bool = False) -> Path:
                 "max_seq_length": 32,
                 "bidirectional": bidirectional,
                 "matryoshka_dims": [HIDDEN, 16],
+                **kw,
             }
         )
     )
@@ -150,3 +151,16 @@ def test_sampler_starvation_fails_the_stage(tmp_path: Path, tiny_modernbert: Pat
     with pytest.raises(TrainingShortfall, match="trained 0 of 2"):
         run_stage(stage, device="cpu")
     assert not (tmp_path / "out" / "final").exists()
+
+
+def test_final_model_keeps_full_context_not_training_length(tmp_path: Path, tiny_modernbert: Path) -> None:
+    """Trained at 32 tokens; saved at the backbone's 128 positions, or the configured override."""
+    data = write_mix(tmp_path / "d")
+    final = run_stage(_stage(tmp_path / "a", _model_yaml(tmp_path, tiny_modernbert), data), device="cpu")
+    assert load_model(final, device="cpu").max_seq_length == 128
+    (tmp_path / "b").mkdir()
+    pinned = _model_yaml(tmp_path / "b", tiny_modernbert, inference_max_seq_length=64)
+    assert (
+        load_model(run_stage(_stage(tmp_path / "b", pinned, data), device="cpu"), device="cpu").max_seq_length
+        == 64
+    )

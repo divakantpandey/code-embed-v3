@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from code_embed_v3.data.build import read_manifest
+from code_embed_v3.eval.behaviour_eval import EVAL_MAX_SEQ_LENGTH
 from code_embed_v3.modeling import load_model
 from code_embed_v3.prompts import mteb_model_prompts
 
@@ -76,12 +77,15 @@ def run(
     base_model: str | None = None,
     tasks: list[str] | None = None,
     allow_eval_overlap: bool = False,
+    max_seq_length: int | None = EVAL_MAX_SEQ_LENGTH,
 ) -> Any:
     import mteb
     from mteb.cache import ResultCache
     from mteb.models.sentence_transformer_wrapper import SentenceTransformerEncoderWrapper
 
     model = load_model(model_path, truncate_dim=truncate_dim)
+    if max_seq_length is not None:
+        model.max_seq_length = max_seq_length
     has_prompts = "nl2code" in getattr(model, "prompts", {})
     wrapper = SentenceTransformerEncoderWrapper(
         model, model_prompts=mteb_model_prompts() if has_prompts else None

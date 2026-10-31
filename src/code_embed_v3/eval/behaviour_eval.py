@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 EXEC_REPO = "AaryanK/ExecRetrieval"
 COQUIR_REPO = "jiahuimbzuai/CoQuIR"
+# GTE-ModernBERT's native context; every model is scored at this length.
+EVAL_MAX_SEQ_LENGTH = 8192
 COQUIR_SUBSETS = ("CodeNet-B", "CodeNet-E", "Defects4J", "CVEFixes", "SafeCoder", "DepreAPI", "SQLR2")
 
 
@@ -118,12 +120,25 @@ def coquir_scores(
     }
 
 
-def evaluate(model: Any, batch_size: int = 64, subsets: tuple[str, ...] = COQUIR_SUBSETS) -> dict[str, Any]:
+def evaluate(
+    model: Any,
+    batch_size: int = 64,
+    subsets: tuple[str, ...] = COQUIR_SUBSETS,
+    max_seq_length: int | None = EVAL_MAX_SEQ_LENGTH,
+) -> dict[str, Any]:
+    """``max_seq_length`` is applied to every model so base and candidate see the same text; a
+    checkpoint's own (training) length otherwise cuts long code: 86/465 Defects4J pairs are identical
+    at 256 tokens."""
+    if max_seq_length is not None:
+        model.max_seq_length = max_seq_length
     queries, corpus = load_exec_retrieval()
     corpus_ids = list(corpus)
     q = _encode(model, [x["query"] for x in queries], True, batch_size)
     d = _encode(model, [corpus[c] for c in corpus_ids], False, batch_size)
-    results: dict[str, Any] = {"ExecRetrieval": exec_retrieval_scores(q @ d.T, corpus_ids, queries)}
+    results: dict[str, Any] = {
+        "max_seq_length": model.max_seq_length,
+        "ExecRetrieval": exec_retrieval_scores(q @ d.T, corpus_ids, queries),
+    }
     for subset in subsets:
         qs, cs, qrels = load_coquir(subset)
         qids, cids = list(qs), list(cs)

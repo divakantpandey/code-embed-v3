@@ -417,7 +417,10 @@ def _cmd_behaviour_eval(a: argparse.Namespace) -> None:
     from code_embed_v3.modeling import load_model
 
     results = evaluate(
-        load_model(a.model), batch_size=a.batch_size, subsets=tuple(a.subsets or COQUIR_SUBSETS)
+        load_model(a.model),
+        batch_size=a.batch_size,
+        subsets=tuple(a.subsets or COQUIR_SUBSETS),
+        max_seq_length=a.max_seq_length or None,
     )
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -637,6 +640,7 @@ def _cmd_mteb(a: argparse.Namespace) -> None:
         base_model=a.base_model,
         tasks=a.tasks,
         allow_eval_overlap=a.allow_eval_overlap,
+        max_seq_length=a.max_seq_length or None,
     )
 
 
@@ -768,6 +772,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--out", required=True)
     s.add_argument("--subsets", nargs="*", help="CoQuIR subsets; default: all")
     s.add_argument("--batch-size", type=int, default=64)
+    s.add_argument("--max-seq-length", type=int, default=8192, help="applied to every model; 0 keeps its own")
     s.set_defaults(fn=_cmd_behaviour_eval)
 
     s = sub.add_parser(
@@ -873,6 +878,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--base-model", help="checkpoint fine-tuned from; its declared training data is inherited")
     s.add_argument("--tasks", nargs="*", help="evaluate these tasks only (dry runs)")
     s.add_argument("--allow-eval-overlap", action="store_true", help="only for a separately reported run")
+    s.add_argument("--max-seq-length", type=int, default=8192, help="applied to every model; 0 keeps its own")
     s.set_defaults(fn=_cmd_mteb)
 
     s = sub.add_parser(

@@ -42,6 +42,9 @@ class ModelConfig:
     # Only meaningful for decoder backbones (Qwen2/Qwen3); encoders are already bidirectional.
     bidirectional: bool = False
     max_seq_length: int = 1024
+    # Length saved with the final model (what users and evals get). None: the backbone's position limit
+    # (8192 for GTE-ModernBERT). Training runs at the shorter stage `max_seq_length` for cost.
+    inference_max_seq_length: int | None = None
     matryoshka_dims: list[int] = field(default_factory=lambda: [768, 512, 256, 128, 64])
     # "auto": flash-attention 2 (needs the `flash` extra and CUDA), otherwise sdpa.
     attn_implementation: str | None = "auto"
