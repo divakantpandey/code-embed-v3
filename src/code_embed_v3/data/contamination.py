@@ -18,7 +18,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from datasets import Dataset
+from datasets import Dataset, List, Value
 from datasketch import MinHash, MinHashLSH
 
 logger = logging.getLogger(__name__)
@@ -142,7 +142,11 @@ def audit_dataset(ds: Dataset, index: EvalIndex, num_proc: int = 1) -> tuple[Dat
             tasks |= index.hits(row[c])
         return {"_hits": sorted(tasks)}
 
-    flagged = ds.map(flag, num_proc=num_proc, desc="contamination audit")
+    # Declared, not inferred: a writer batch without any hit would type `_hits` as list<null> and the
+    # next batch with a hit would fail to cast.
+    features = ds.features.copy()
+    features["_hits"] = List(Value("string"))
+    flagged = ds.map(flag, num_proc=num_proc, features=features, desc="contamination audit")
     counts: Counter[str] = Counter(t for hits in flagged["_hits"] for t in hits)
     kept = flagged.filter(lambda r: not r["_hits"], num_proc=num_proc).remove_columns("_hits")
     return kept, counts

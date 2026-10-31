@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 from pathlib import Path
 
@@ -57,4 +58,6 @@ def available_cpus() -> int:
             if q > 0:
                 quota = q / int(v1_period.read_text())
     affinity = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
-    return max(1, min(affinity, int(quota)) if quota else affinity)
+    # Round up: a 7.65-CPU quota (RunPod A40) leaves 0.65 of a core idle with 7 workers; 8 cost only a
+    # little throttling.
+    return max(1, min(affinity, math.ceil(quota)) if quota else affinity)

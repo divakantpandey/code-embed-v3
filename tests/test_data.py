@@ -157,6 +157,18 @@ def test_cornstack_reverse_gives_code_to_description(monkeypatch: pytest.MonkeyP
     assert rows == [{"anchor": "def s(x): return sorted(x)", "positive": "sort a list"}]
 
 
+def test_audit_handles_a_hit_after_a_hit_free_writer_batch() -> None:
+    """The first 1,000-row write of a map worker had no hits, so `_hits` was typed list<null> and the
+    first real hit later in that worker failed to cast (pilot audit, 2026-10-31)."""
+    idx = EvalIndex()
+    idx.add("CosQA", LONG)
+    anchors = [f"unrelated query {i}" for i in range(1200)]
+    anchors[1100] = LONG
+    ds = Dataset.from_dict({"anchor": anchors, "positive": ["p"] * 1200})
+    kept, counts = audit_dataset(ds, idx, num_proc=1)
+    assert len(kept) == 1199 and counts == {"CosQA": 1}
+
+
 def test_parallel_index_matches_serial(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(contamination, "PARALLEL_CHUNK", 2)
     texts = [f"def f{i}(x): return x * {i} + {i % 3} if x else None  # variant {i}" for i in range(40)] + [
