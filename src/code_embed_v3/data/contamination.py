@@ -135,5 +135,17 @@ def audit_dataset(ds: Dataset, index: EvalIndex, num_proc: int = 1) -> tuple[Dat
     return kept, counts
 
 
+def full_audit_tasks() -> list[str]:
+    """Every task a training source must be audited against before a real (non-dry-run) stage trains on it:
+    all of MTEB(Code, v1), CoIR and CoREB(v1), plus ExecRetrieval and each CoQuIR subset."""
+    import mteb
+
+    from code_embed_v3.eval.behaviour_eval import COQUIR_SUBSETS
+    from code_embed_v3.eval.run_mteb import DEFAULT_BENCHMARKS
+
+    tasks = {t.metadata.name for b in DEFAULT_BENCHMARKS for t in mteb.get_benchmark(b).tasks}
+    return sorted(tasks | {"ExecRetrieval"} | {f"CoQuIR-{s}" for s in COQUIR_SUBSETS})
+
+
 def write_report(path: str | Path, report: dict[str, Any]) -> None:
     Path(path).write_text(json.dumps(report, indent=2, sort_keys=True))

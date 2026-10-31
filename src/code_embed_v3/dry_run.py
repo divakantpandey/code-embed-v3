@@ -70,6 +70,8 @@ class DryRun:
             report_to=["wandb"] if self.wandb else [],
             hub_repo=f"{self.hub_user}/ce3-dryrun-{name}" if self.hub_user else None,
             logging_steps=1,
+            # The dry-run audits against DRY_TASKS only; its models are never released.
+            audit_scope="any",
             **overrides,
         )
         if raw["hub_repo"]:

@@ -165,10 +165,9 @@ def write_mix(
     Dataset.from_dict({"anchor": [a for a, _ in PAIRS], "positive": [p for _, p in PAIRS]}).save_to_disk(
         str(root / DEV_DIR / name)
     )
-    manifest = {
-        "sources": {
-            name: {"family": family, "rows": len(rows["anchor"]), "dev_rows": len(PAIRS), "audited": True}
-        }
-    }
+    from code_embed_v3.data.contamination import full_audit_tasks
+
+    meta = {"family": family, "rows": len(rows["anchor"]), "dev_rows": len(PAIRS), "audited": True}
+    manifest = {"sources": {name: {**meta, "audited_against": full_audit_tasks()}}}
     (root / MANIFEST).write_text(json.dumps(manifest))
     return root

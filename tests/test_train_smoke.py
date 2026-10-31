@@ -10,6 +10,7 @@ import torch
 import yaml
 
 from code_embed_v3.config import StageConfig
+from code_embed_v3.data.build import MANIFEST
 from code_embed_v3.modeling import META_FILE, load_model
 from code_embed_v3.train import TrainingCollapsed, TrainingShortfall, WeightedLoss, per_source_loss, run_stage
 
@@ -164,3 +165,28 @@ def test_final_model_keeps_full_context_not_training_length(tmp_path: Path, tiny
         load_model(run_stage(_stage(tmp_path / "b", pinned, data), device="cpu"), device="cpu").max_seq_length
         == 64
     )
+
+
+def test_partly_audited_mix_is_refused(tmp_path: Path, tiny_modernbert: Path) -> None:
+    """A dry-run audit covers two tasks; a real stage must not train on it and then report MTEB."""
+    data = write_mix(tmp_path / "d")
+    manifest = json.loads((data / MANIFEST).read_text())
+    manifest["sources"]["toy"]["audited_against"] = ["CosQA", "SyntheticText2SQL"]
+    (data / MANIFEST).write_text(json.dumps(manifest))
+    with pytest.raises(RuntimeError, match="not audited against every eval task"):
+        run_stage(_stage(tmp_path, _model_yaml(tmp_path, tiny_modernbert), data), device="cpu")
+    run_stage(
+        _stage(tmp_path / "dry", _model_yaml(tmp_path, tiny_modernbert), data, audit_scope="any"),
+        device="cpu",
+    )
+
+
+def test_full_audit_covers_every_reported_benchmark() -> None:
+    import mteb
+
+    from code_embed_v3.data.contamination import full_audit_tasks
+
+    tasks = set(full_audit_tasks())
+    for bench in ("MTEB(Code, v1)", "CoIR", "CoREB(v1)"):
+        assert {t.metadata.name for t in mteb.get_benchmark(bench).tasks} <= tasks
+    assert {"ExecRetrieval", "CoQuIR-Defects4J", "CoQuIR-CodeNet-B"} <= tasks

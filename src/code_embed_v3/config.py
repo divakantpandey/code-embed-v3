@@ -144,6 +144,9 @@ class StageConfig:
     max_seq_length: int | None = None
     # Training on a source listed in `overlaps_eval` makes mteb flag the model; off unless deliberate.
     allow_eval_overlap: bool = False
+    # "full": every source must be audited against all reported eval tasks (MTEB(Code), CoIR, CoREB,
+    # ExecRetrieval, CoQuIR). "any": the audited flag is enough; only for dry-runs on a 2-task audit.
+    audit_scope: Literal["full", "any"] = "full"
     # Loss multiplier per source name; unlisted sources weigh 1.
     source_loss_weights: dict[str, float] = field(default_factory=dict)
     # Stop and fail once the dev score falls below this fraction of the untrained model's; None disables.

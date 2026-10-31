@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Collection
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, cast
@@ -54,14 +55,29 @@ def write_manifest(data_dir: str | Path, manifest: dict[str, Any]) -> None:
 
 
 def load_mix(
-    data_dir: str | Path, require_audit: bool = True, allow_eval_overlap: bool = False
+    data_dir: str | Path,
+    require_audit: bool = True,
+    allow_eval_overlap: bool = False,
+    audited_against: Collection[str] = (),
 ) -> tuple[DatasetDict, dict[str, Family]]:
-    """Load every source of a built mix; returns the datasets and each source's task family."""
+    """Load every source of a built mix; returns the datasets and each source's task family.
+
+    ``audited_against``: tasks every source must have been audited against. A dry-run audit covers two
+    tasks only, so the `audited` flag alone would let such a mix train a model that is then scored on
+    the benchmarks it was never checked against."""
     data_dir = Path(data_dir)
     manifest = read_manifest(data_dir)
     unaudited = [n for n, m in manifest["sources"].items() if not m.get("audited")]
     if require_audit and unaudited:
         raise RuntimeError(f"run `ce3 audit` first; unaudited sources: {unaudited}")
+    missing = {
+        n: sorted(set(audited_against) - set(m.get("audited_against", [])))
+        for n, m in manifest["sources"].items()
+    }
+    missing = {n: tasks for n, tasks in missing.items() if tasks}
+    if require_audit and missing:
+        shown = {n: t[:5] + (["..."] if len(t) > 5 else []) for n, t in missing.items()}
+        raise RuntimeError(f"run the full `ce3 audit`; sources not audited against every eval task: {shown}")
     # mteb flags a model by provenance, not by rows: training on these makes it non-zero-shot on the
     # listed tasks no matter how thoroughly the audit removed their test rows.
     overlapping = {n: m["overlaps_eval"] for n, m in manifest["sources"].items() if m.get("overlaps_eval")}

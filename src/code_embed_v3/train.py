@@ -36,6 +36,7 @@ from transformers import TrainerCallback, TrainerControl, TrainerState, Training
 from code_embed_v3 import hub
 from code_embed_v3.config import ModelConfig, StageConfig
 from code_embed_v3.data.build import MANIFEST, load_mix
+from code_embed_v3.data.contamination import full_audit_tasks
 from code_embed_v3.env import available_cpus
 from code_embed_v3.eval.dev_suite import build_dev_evaluator
 from code_embed_v3.modeling import META_FILE, inference_length, init_model, model_meta, save_model
@@ -412,7 +413,10 @@ def run_stage(
     model.max_seq_length = model_cfg.max_seq_length
 
     train_dataset, families = load_mix(
-        stage.data_dir, require_audit=require_audit, allow_eval_overlap=stage.allow_eval_overlap
+        stage.data_dir,
+        require_audit=require_audit,
+        allow_eval_overlap=stage.allow_eval_overlap,
+        audited_against=full_audit_tasks() if stage.audit_scope == "full" else (),
     )
     evaluator = build_dev_evaluator(stage.dev_suite) if stage.dev_suite else None
     if stage.mini_batch_size != "auto":
