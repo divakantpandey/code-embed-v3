@@ -28,6 +28,7 @@ from code_embed_v3.paths import resolve
 GTE = "Alibaba-NLP/gte-modernbert-base"
 # Small, fast mteb tasks; the audit is checked against the same ones.
 DRY_TASKS = ["CosQA", "SyntheticText2SQL"]
+HUB_CHECKPOINT = "last-checkpoint/trainer_state.json"
 
 
 class DryRunError(RuntimeError):
@@ -105,32 +106,45 @@ class DryRun:
                 start_new_session=True,
             )
             target = output_dir / f"checkpoint-{kill_at_step}" / "trainer_state.json"
-            while proc.poll() is None and not target.exists():
+            # A lost pod also loses uploads still in flight, and the full checkpoint (with optimizer state)
+            # takes longer to upload than a few save intervals, so only kill once the Hub holds one.
+            ready, next_hub_check = False, 0.0
+            while proc.poll() is None and not ready:
                 time.sleep(0.5)
+                if not target.exists():
+                    continue
+                if hub_repo is None:
+                    ready = True
+                elif time.monotonic() >= next_hub_check:
+                    ready = self.hub_has(hub_repo, HUB_CHECKPOINT)
+                    next_hub_check = time.monotonic() + 10
             if proc.poll() is not None:
-                raise DryRunError(f"training ended before checkpoint-{kill_at_step}; see {log}")
+                raise DryRunError(f"training ended before a resumable checkpoint existed; see {log}")
             os.killpg(proc.pid, signal.SIGTERM)
             proc.wait(timeout=120)
         print(f"ok  {'train killed':<22} at checkpoint-{kill_at_step}", flush=True)
         if hub_repo:
-            self.wait_for_hub_file(hub_repo, "last-checkpoint/trainer_state.json")
             shutil.rmtree(output_dir)
         out = self.ce3("train-resumed", "train", str(config))
         if "resuming from" not in out:
             raise DryRunError("second run did not resume from a checkpoint")
 
-    def wait_for_hub_file(self, repo: str, path: str, timeout: float = 600) -> None:
-        """Hub pushes run in the background, so poll until the file is there."""
+    @staticmethod
+    def hub_has(repo: str, path: str) -> bool:
         from huggingface_hub import HfApi
         from huggingface_hub.errors import RepositoryNotFoundError
 
+        try:
+            return path in HfApi().list_repo_files(repo)
+        except RepositoryNotFoundError:
+            return False
+
+    def wait_for_hub_file(self, repo: str, path: str, timeout: float = 600) -> None:
+        """Hub pushes run in the background, so poll until the file is there."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            try:
-                if path in HfApi().list_repo_files(repo):
-                    return
-            except RepositoryNotFoundError:
-                pass
+            if self.hub_has(repo, path):
+                return
             time.sleep(10)
         raise DryRunError(f"{repo}/{path} never appeared on the Hub")
 
@@ -219,7 +233,8 @@ class DryRun:
             dev_suite=str(combined),
             batch_size=per_gpu * self.gpus,
             max_seq_length=256,
-            max_steps=120,
+            # Long enough (~3 min) for a full checkpoint to finish uploading before training ends.
+            max_steps=300,
             save_steps=20,
             eval_steps=60,
         )

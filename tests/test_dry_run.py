@@ -52,3 +52,20 @@ def test_dry_run_refuses_stale_hub_repos(monkeypatch: pytest.MonkeyPatch, tmp_pa
         d.require_fresh_hub_repos()
     hub["u/ce3-dryrun-ft"] = [".gitattributes"]
     d.require_fresh_hub_repos()
+
+
+def test_hub_has_treats_missing_repo_as_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    from huggingface_hub import HfApi
+    from huggingface_hub.errors import RepositoryNotFoundError
+
+    from code_embed_v3.dry_run import HUB_CHECKPOINT, DryRun
+
+    def files(_: HfApi, repo: str) -> list[str]:
+        if repo == "u/missing":
+            raise RepositoryNotFoundError(repo, response=MagicMock())
+        return [HUB_CHECKPOINT] if repo == "u/done" else ["model.safetensors"]
+
+    monkeypatch.setattr(HfApi, "list_repo_files", files)
+    assert DryRun.hub_has("u/done", HUB_CHECKPOINT)
+    assert not DryRun.hub_has("u/model-only", HUB_CHECKPOINT)
+    assert not DryRun.hub_has("u/missing", HUB_CHECKPOINT)
