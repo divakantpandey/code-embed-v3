@@ -313,3 +313,30 @@ def test_vllm_worker_crash_after_writing_outputs_is_kept(
             isolated.run_vllm_workers(tmp_path / "w.py", jobs, [], 1, tmp_path / "spec")
     else:
         isolated.run_vllm_workers(tmp_path / "w.py", jobs, [], 1, tmp_path / "spec")
+
+
+def test_label_check_clips_both_backends_to_the_teacher_window() -> None:
+    from code_embed_v3.data.mining import (
+        TEACHER_MAX_DOC_TOKENS,
+        TEACHER_MAX_QUERY_TOKENS,
+        clip_to_teacher_window,
+    )
+
+    class Words:
+        def __call__(self, texts: list[str], **kw: Any) -> dict[str, list[list[str]]]:
+            return {"input_ids": [t.split()[: kw["max_length"]] for t in texts]}
+
+        def batch_decode(self, ids: list[list[str]]) -> list[str]:
+            return [" ".join(i) for i in ids]
+
+    ds = Dataset.from_dict(
+        {
+            "anchor": ["q " * 600, "short query"],
+            "positive": ["d " * 3000, "x"],
+            "negative_1": ["y", "d " * 2100],
+        }
+    )
+    out = clip_to_teacher_window(ds, Words())
+    assert [len(t.split()) for t in out["anchor"]] == [TEACHER_MAX_QUERY_TOKENS, 2]
+    assert [len(t.split()) for t in out["positive"]] == [TEACHER_MAX_DOC_TOKENS, 1]
+    assert [len(t.split()) for t in out["negative_1"]] == [1, TEACHER_MAX_DOC_TOKENS]

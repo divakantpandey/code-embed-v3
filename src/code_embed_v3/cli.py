@@ -201,14 +201,21 @@ def _cmd_label_check(a: argparse.Namespace) -> None:
     from sentence_transformers import CrossEncoder
 
     from code_embed_v3.data.build import read_manifest
-    from code_embed_v3.data.mining import crossencoder_scorer, label_source, load_dataset_dir, vllm_scorer
+    from code_embed_v3.data.mining import (
+        clip_to_teacher_window,
+        crossencoder_scorer,
+        label_source,
+        load_dataset_dir,
+        vllm_scorer,
+    )
 
     work = Path(a.work_dir)
+    teacher = CrossEncoder(a.teacher)
     samples = {}
     for name, meta in read_manifest(a.data_dir)["sources"].items():
         ds = load_dataset_dir(Path(a.data_dir) / name)
-        samples[name] = (ds.select(range(min(a.rows, len(ds)))), meta["family"])
-    teacher = CrossEncoder(a.teacher)
+        sample = clip_to_teacher_window(ds.select(range(min(a.rows, len(ds)))), teacher.tokenizer)
+        samples[name] = (sample, meta["family"])
     reference = crossencoder_scorer(teacher, batch_size=a.batch_size)
     refs = {
         name: np.asarray(label_source(ds, reference, family, work / "ref" / name)["label"])

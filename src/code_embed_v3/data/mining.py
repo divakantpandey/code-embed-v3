@@ -14,6 +14,7 @@ import torch
 from datasets import Dataset, load_from_disk
 from sentence_transformers import CrossEncoder, SentenceTransformer
 from sentence_transformers.util import mine_hard_negatives
+from transformers import PreTrainedTokenizerBase
 
 from code_embed_v3.data.isolated import run_vllm_workers
 from code_embed_v3.prompts import QUERY_PROMPTS, Family
@@ -67,6 +68,9 @@ def mine(
 
 
 VLLM_WORKER = Path(__file__).with_name("vllm_teacher.py")
+# The vLLM teacher's per-side token budget; the cross-encoder reference has none (131k context).
+TEACHER_MAX_QUERY_TOKENS = 512
+TEACHER_MAX_DOC_TOKENS = 2048
 
 
 def doc_columns(ds: Dataset) -> list[str]:
@@ -113,14 +117,19 @@ def crossencoder_scorer(teacher: CrossEncoder, batch_size: int) -> ShardScorer:
     return score
 
 
-def vllm_scorer(teacher: str, num_gpus: int, max_doc_tokens: int = 2048) -> ShardScorer:
+def vllm_scorer(teacher: str, num_gpus: int) -> ShardScorer:
     """One vLLM process per GPU, each taking every ``num_gpus``-th shard."""
+    args = [
+        "--model", teacher,
+        "--max-query-tokens", str(TEACHER_MAX_QUERY_TOKENS),
+        "--max-doc-tokens", str(TEACHER_MAX_DOC_TOKENS),
+    ]  # fmt: skip
 
     def score(jobs: list[ScoreJob]) -> None:
         run_vllm_workers(
             VLLM_WORKER,
             jobs,
-            ["--model", teacher, "--max-doc-tokens", str(max_doc_tokens)],
+            args,
             num_gpus,
             Path(jobs[0]["output"]).parent,
         )
@@ -132,6 +141,28 @@ def _save_npy(path: Path, arr: np.ndarray) -> None:
     tmp = path.with_name(path.name + ".tmp.npy")
     np.save(tmp, arr)
     os.replace(tmp, path)
+
+
+def clip_to_teacher_window(ds: Dataset, tokenizer: PreTrainedTokenizerBase) -> Dataset:
+    """Cut queries and documents to the vLLM teacher's token budget, the way its worker does.
+
+    Lets the cross-encoder reference score exactly the text vLLM sees: long contest solutions and
+    diffs otherwise differ only by truncation, and the parity check reads that as a broken backend.
+    """
+
+    def clip(texts: list[str], max_tokens: int) -> list[str]:
+        ids = tokenizer(texts, add_special_tokens=False, truncation=True, max_length=max_tokens)["input_ids"]
+        return tokenizer.batch_decode(ids)
+
+    docs = doc_columns(ds)
+
+    def clip_batch(batch: dict[str, list[str]]) -> dict[str, list[str]]:
+        return {
+            "anchor": clip(batch["anchor"], TEACHER_MAX_QUERY_TOKENS),
+            **{c: clip(batch[c], TEACHER_MAX_DOC_TOKENS) for c in docs},
+        }
+
+    return ds.map(clip_batch, batched=True)
 
 
 def label_source(
