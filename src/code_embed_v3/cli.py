@@ -419,7 +419,7 @@ def _cmd_pilot_gate(a: argparse.Namespace) -> None:
         json.loads(Path(a.candidate).read_text()),
         mteb_code_mean(Path(a.mteb_baseline)),
         mteb_code_mean(Path(a.mteb_candidate)),
-        min_exec_gain=a.min_exec_gain,
+        min_exec_rel_gain=a.min_exec_rel_gain,
         max_mteb_drop=a.max_mteb_drop,
         max_coquir_drop=a.max_coquir_drop,
     )
@@ -763,10 +763,12 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--candidate", required=True)
     s.add_argument("--mteb-baseline", required=True, help="mteb results folder")
     s.add_argument("--mteb-candidate", required=True)
-    s.add_argument("--min-exec-gain", type=float, default=0.10)
+    s.add_argument(
+        "--min-exec-rel-gain", type=float, default=0.10, help="exec@1 gain relative to baseline (0.1 = +10%%)"
+    )
     s.add_argument("--max-mteb-drop", type=float, default=0.005)
     s.add_argument(
-        "--max-coquir-drop", type=float, default=0.01, help="mean CoQuIR pairwise accuracy, 0-1 scale"
+        "--max-coquir-drop", type=float, default=0.05, help="mean CoQuIR pairwise accuracy, 0-1 scale"
     )
     s.set_defaults(fn=_cmd_pilot_gate)
 

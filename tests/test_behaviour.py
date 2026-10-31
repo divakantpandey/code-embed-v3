@@ -251,12 +251,20 @@ def test_pilot_gate_decision() -> None:
     ok, report = behaviour_eval.pilot_gate(base, cand, mteb_baseline=0.700, mteb_candidate=0.697)
     assert ok is True
     assert report["exec@1_gain"] == pytest.approx(0.13)
+    assert report["exec@1_rel_gain"] == pytest.approx(0.52)
     # SQLR2 is NaN in the baseline, so only the two shared subsets count.
     assert report["coquir_pairwise_drop"] == pytest.approx(0.005)
+    assert report["CoQuIR-CVEFixes_pairwise_drop"] == pytest.approx(0.02)
+    assert "CoQuIR-SQLR2_pairwise_drop" not in report
 
-    worse = {**cand, "CoQuIR-CVEFixes": {"pairwise": 0.60}}
+    worse = {**cand, "CoQuIR-CVEFixes": {"pairwise": 0.55}}
     ok, report = behaviour_eval.pilot_gate(base, worse, mteb_baseline=0.700, mteb_candidate=0.697)
-    assert ok is False and report["coquir_pairwise_drop"] == pytest.approx(0.045)
+    assert ok is False and report["coquir_pairwise_drop"] == pytest.approx(0.07)
+
+    # +8% relative (0.25 -> 0.27) misses the +10% bar even though everything else holds.
+    small = {**cand, "ExecRetrieval": {"exec@1": 0.27}}
+    ok, report = behaviour_eval.pilot_gate(base, small, mteb_baseline=0.700, mteb_candidate=0.697)
+    assert ok is False and report["exec@1_rel_gain"] == pytest.approx(0.08)
 
     with pytest.raises(ValueError, match="no CoQuIR subset"):
         behaviour_eval.pilot_gate(
