@@ -57,11 +57,11 @@ def _cmd_audit(a: argparse.Namespace) -> None:
         print("every source is already audited against these tasks")
         return
     task_names = sorted(set(task_names) | set(external))
-    index = index_mteb_tasks([t for t in task_names if t not in external])
-    index_texts(external, index)
+    num_proc = a.num_proc or available_cpus()
+    index = index_mteb_tasks([t for t in task_names if t not in external], num_proc=num_proc)
+    index_texts(external, index, num_proc)
     report_path = Path(a.data_dir) / "contamination_report.json"
     report: dict[str, dict[str, int]] = json.loads(report_path.read_text()) if report_path.exists() else {}
-    num_proc = a.num_proc or available_cpus()
     for name, meta in pending.items():
         path = source_dir(a.data_dir, name, meta)
         ds = load_from_disk(str(path))

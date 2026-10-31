@@ -12,7 +12,9 @@ import json
 import logging
 import re
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
+from concurrent.futures import ProcessPoolExecutor
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +55,9 @@ def minhash(text: str, num_perm: int, ngram: int) -> MinHash | None:
     return mh
 
 
+PARALLEL_CHUNK = 256
+
+
 class EvalIndex:
     """Exact + MinHash-LSH index over eval texts, tagged with the task each text came from."""
 
@@ -63,11 +68,22 @@ class EvalIndex:
         self._n = 0
 
     def add(self, task: str, text: str) -> None:
-        self.exact.setdefault(exact_key(text), task)
-        mh = minhash(text, self.num_perm, self.ngram)
-        if mh is not None:
-            self.lsh.insert(f"{task}::{self._n}", mh)
-            self._n += 1
+        self.add_many(task, [text])
+
+    def add_many(self, task: str, texts: Sequence[str], num_proc: int = 1) -> None:
+        """Same index as ``add`` per text; MinHash, the costly part, runs on ``num_proc`` processes."""
+        for text in texts:
+            self.exact.setdefault(exact_key(text), task)
+        sign = partial(minhash, num_perm=self.num_perm, ngram=self.ngram)
+        if num_proc > 1 and len(texts) >= 4 * PARALLEL_CHUNK:
+            with ProcessPoolExecutor(num_proc) as pool:
+                hashes = list(pool.map(sign, texts, chunksize=PARALLEL_CHUNK))
+        else:
+            hashes = [sign(t) for t in texts]
+        for mh in hashes:
+            if mh is not None:
+                self.lsh.insert(f"{task}::{self._n}", mh)
+                self._n += 1
 
     def __len__(self) -> int:
         return len(self.exact)
@@ -83,7 +99,7 @@ class EvalIndex:
         return found
 
 
-def index_mteb_tasks(task_names: list[str], index: EvalIndex | None = None) -> EvalIndex:
+def index_mteb_tasks(task_names: list[str], index: EvalIndex | None = None, num_proc: int = 1) -> EvalIndex:
     import mteb
 
     index = index or EvalIndex()
@@ -102,20 +118,17 @@ def index_mteb_tasks(task_names: list[str], index: EvalIndex | None = None) -> E
                     continue
                 relevant = split.get("relevant_docs") or {}
                 wanted_docs = {d for docs in relevant.values() for d in docs}
-                for q in split["queries"]:
-                    index.add(name, text_of(q["text"]))
-                for d in split["corpus"]:
-                    if d["id"] in wanted_docs:
-                        index.add(name, text_of(d.get("text", "")))
+                texts = [text_of(q["text"]) for q in split["queries"]]
+                texts += [text_of(d.get("text", "")) for d in split["corpus"] if d["id"] in wanted_docs]
+                index.add_many(name, texts, num_proc)
         logger.info("indexed %s (%d unique eval texts so far)", name, len(index))
     return index
 
 
-def index_texts(texts: dict[str, list[str]], index: EvalIndex) -> EvalIndex:
+def index_texts(texts: dict[str, list[str]], index: EvalIndex, num_proc: int = 1) -> EvalIndex:
     """Add non-mteb held-out benchmarks (ExecRetrieval, CoQuIR) under their own task names."""
     for name, items in texts.items():
-        for text in items:
-            index.add(name, text)
+        index.add_many(name, items, num_proc)
     return index
 
 

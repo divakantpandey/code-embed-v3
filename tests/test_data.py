@@ -157,6 +157,23 @@ def test_cornstack_reverse_gives_code_to_description(monkeypatch: pytest.MonkeyP
     assert rows == [{"anchor": "def s(x): return sorted(x)", "positive": "sort a list"}]
 
 
+def test_parallel_index_matches_serial(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(contamination, "PARALLEL_CHUNK", 2)
+    texts = [f"def f{i}(x): return x * {i} + {i % 3} if x else None  # variant {i}" for i in range(40)] + [
+        "a b"
+    ]
+    serial, parallel = EvalIndex(), EvalIndex()
+    for t in texts:
+        serial.add("T", t)
+    parallel.add_many("T", texts, num_proc=2)
+    assert serial.exact == parallel.exact and serial._n == parallel._n == 40
+    probe = texts[7].replace("weight_29", "w29")
+    assert serial.hits(probe) == parallel.hits(probe) == {"T"}
+    assert sorted(serial.lsh.query(contamination.minhash(probe, 128, 5))) == sorted(
+        parallel.lsh.query(contamination.minhash(probe, 128, 5))
+    )
+
+
 def test_index_mteb_tasks_converts_v1_retrieval_format(monkeypatch: pytest.MonkeyPatch) -> None:
     class V1Task:
         metadata = SimpleNamespace(eval_splits=["test"])
@@ -197,7 +214,7 @@ def test_cmd_audit_cleans_train_and_dev_slices(monkeypatch: pytest.MonkeyPatch, 
 
     idx = EvalIndex()
     idx.add("FakeTask", "leaked query")
-    monkeypatch.setattr(contamination, "index_mteb_tasks", lambda tasks, index=None: idx)
+    monkeypatch.setattr(contamination, "index_mteb_tasks", lambda tasks, index=None, num_proc=1: idx)
 
     _cmd_audit(
         SimpleNamespace(
