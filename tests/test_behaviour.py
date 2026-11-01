@@ -461,6 +461,14 @@ def test_behaviour_combine_holds_the_behaviour_share(
     assert len(set(load_from_disk(sources["behaviour"]["path"])["anchor"])) == got[1]
 
 
+def test_mteb_casts_model_to_requested_precision(tiny_modernbert: Path) -> None:
+    model = load_model(tiny_modernbert, device="cpu")
+    assert run_mteb.cast_model(model, None) is model
+    assert next(model.parameters()).dtype == torch.float32
+    run_mteb.cast_model(model, "float16")
+    assert next(model.parameters()).dtype == torch.float16
+
+
 def test_float16_embeddings_are_scored_in_float32() -> None:
     """The fp16 GTE baseline encodes to float16: numpy's float16 matmul is unaccelerated and rounds
     near-twin similarities into ties."""

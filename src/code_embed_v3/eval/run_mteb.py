@@ -66,6 +66,18 @@ def declared_meta(data_dirs: list[str | Path], base_model: str | None, template:
     )
 
 
+def cast_model(model: Any, dtype: str | None) -> Any:
+    """Run the model in ``dtype`` ("float16"/"bfloat16"); None keeps the checkpoint's own.
+
+    The GTE baseline ships fp16 while fine-tunes save fp32, which made MTEB(Code) ~2x slower on the
+    fine-tune; scoring both in fp16 is faster and compares like with like."""
+    import torch
+
+    if dtype is not None:
+        model.to(getattr(torch, dtype))
+    return model
+
+
 def run(
     model_path: str | Path,
     model_name: str,
@@ -78,12 +90,13 @@ def run(
     tasks: list[str] | None = None,
     allow_eval_overlap: bool = False,
     max_seq_length: int | None = EVAL_MAX_SEQ_LENGTH,
+    dtype: str | None = None,
 ) -> Any:
     import mteb
     from mteb.cache import ResultCache
     from mteb.models.sentence_transformer_wrapper import SentenceTransformerEncoderWrapper
 
-    model = load_model(model_path, truncate_dim=truncate_dim)
+    model = cast_model(load_model(model_path, truncate_dim=truncate_dim), dtype)
     if max_seq_length is not None:
         model.max_seq_length = max_seq_length
     has_prompts = "nl2code" in getattr(model, "prompts", {})

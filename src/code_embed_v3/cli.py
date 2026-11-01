@@ -668,6 +668,7 @@ def _cmd_mteb(a: argparse.Namespace) -> None:
         tasks=a.tasks,
         allow_eval_overlap=a.allow_eval_overlap,
         max_seq_length=a.max_seq_length or None,
+        dtype=a.dtype,
     )
 
 
@@ -911,6 +912,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--tasks", nargs="*", help="evaluate these tasks only (dry runs)")
     s.add_argument("--allow-eval-overlap", action="store_true", help="only for a separately reported run")
     s.add_argument("--max-seq-length", type=int, default=8192, help="applied to every model; 0 keeps its own")
+    s.add_argument("--dtype", choices=["float16", "bfloat16"], help="run the model in this precision")
     s.set_defaults(fn=_cmd_mteb)
 
     s = sub.add_parser(
