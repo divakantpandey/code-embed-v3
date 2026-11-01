@@ -71,7 +71,11 @@ def _encode(
 ) -> np.ndarray:
     # Models without our prompts (e.g. the GTE-ModernBERT baseline) encode queries plain.
     kwargs = {"prompt_name": prompt_name} if query and prompt_name in getattr(model, "prompts", {}) else {}
-    return np.asarray(model.encode(texts, batch_size=batch_size, normalize_embeddings=True, **kwargs))
+    # float32 always: the GTE baseline ships fp16 and encodes to float16, whose numpy matmul has no BLAS
+    # kernel (a 26k x 53k CoQuIR product ran for over an hour) and whose rounding ties near-twin scores.
+    return np.asarray(
+        model.encode(texts, batch_size=batch_size, normalize_embeddings=True, **kwargs), dtype=np.float32
+    )
 
 
 def exec_retrieval_scores(

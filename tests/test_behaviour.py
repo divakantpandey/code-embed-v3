@@ -461,6 +461,17 @@ def test_behaviour_combine_holds_the_behaviour_share(
     assert len(set(load_from_disk(sources["behaviour"]["path"])["anchor"])) == got[1]
 
 
+def test_float16_embeddings_are_scored_in_float32() -> None:
+    """The fp16 GTE baseline encodes to float16: numpy's float16 matmul is unaccelerated and rounds
+    near-twin similarities into ties."""
+
+    class Half:
+        def encode(self, texts: list[str], **_: Any) -> np.ndarray:
+            return np.ones((len(texts), 4), dtype=np.float16)
+
+    assert behaviour_eval._encode(Half(), ["a", "b"], query=False, batch_size=2).dtype == np.float32
+
+
 def test_eval_scores_every_model_at_one_length(monkeypatch: pytest.MonkeyPatch) -> None:
     """A checkpoint saved at its training length must not be scored on cut text against a full-length base."""
     queries = [{"query": "q", "correct_corpus_ids": ["c1"], "paired_distractor_corpus_ids": ["c2"]}]
