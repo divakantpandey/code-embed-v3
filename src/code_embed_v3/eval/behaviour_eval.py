@@ -78,48 +78,70 @@ def _encode(
     )
 
 
-def exec_retrieval_scores(
+def exec_retrieval_outcomes(
     sims: np.ndarray, corpus_ids: list[str], queries: list[dict[str, Any]]
-) -> dict[str, float]:
+) -> dict[str, list[int]]:
+    """Per query, in query order: 1 if the query counts towards each metric."""
     order = np.argsort(-sims, axis=1)
     idx = {cid: j for j, cid in enumerate(corpus_ids)}
-    top1 = top10 = beats_paired = 0
+    out: dict[str, list[int]] = {"exec@1": [], "exec@10": [], "beats_paired_distractors": []}
     for qi, q in enumerate(queries):
         correct = {str(c) for c in q["correct_corpus_ids"]}
         ranked = [corpus_ids[j] for j in order[qi, :10]]
-        top1 += ranked[0] in correct
-        top10 += bool(correct & set(ranked))
         best_correct = max(sims[qi, idx[c]] for c in correct if c in idx)
         paired = [sims[qi, idx[str(d)]] for d in q.get("paired_distractor_corpus_ids") or [] if str(d) in idx]
-        beats_paired += all(best_correct > s for s in paired)
-    n = len(queries)
-    return {"exec@1": top1 / n, "exec@10": top10 / n, "beats_paired_distractors": beats_paired / n}
+        out["exec@1"].append(int(ranked[0] in correct))
+        out["exec@10"].append(int(bool(correct & set(ranked))))
+        out["beats_paired_distractors"].append(int(all(best_correct > s for s in paired)))
+    return out
 
 
-def coquir_scores(
-    sims: np.ndarray, query_ids: list[str], corpus_ids: list[str], qrels: list[dict[str, Any]]
+def exec_retrieval_scores(
+    sims: np.ndarray, corpus_ids: list[str], queries: list[dict[str, Any]]
 ) -> dict[str, float]:
+    outcomes = exec_retrieval_outcomes(sims, corpus_ids, queries)
+    return {k: sum(v) / len(v) for k, v in outcomes.items()}
+
+
+def coquir_outcomes(
+    sims: np.ndarray, query_ids: list[str], corpus_ids: list[str], qrels: list[dict[str, Any]]
+) -> dict[str, list[Any]]:
+    """Per scored qrel row: its qid, pairs ranked right, pairs, and ndcg@10 (None without positives).
+    Pairs of one query share its embedding, so significance tests resample queries, not pairs."""
     q_idx = {q: i for i, q in enumerate(query_ids)}
     d_idx = {d: j for j, d in enumerate(corpus_ids)}
-    pair_hits = pairs = 0
-    ndcg = []
+    out: dict[str, list[Any]] = {"qid": [], "pair_hits": [], "pairs": [], "ndcg@10": []}
     for rel in qrels:
         qi = q_idx.get(str(rel["qid"]))
         if qi is None:
             continue
         pos = [d_idx[str(d)] for d in rel.get("pos-docids") or [] if str(d) in d_idx]
         neg = [d_idx[str(d)] for d in rel.get("neg-docids") or [] if str(d) in d_idx]
-        for p in pos:
-            for n in neg:
-                pairs += 1
-                pair_hits += sims[qi, p] > sims[qi, n]
+        hits = sum(int(sims[qi, p] > sims[qi, n]) for p in pos for n in neg)
+        ndcg = None
         if pos:
             top = np.argsort(-sims[qi])[:10]
             gains = [1.0 / np.log2(r + 2) for r, j in enumerate(top) if j in set(pos)]
             ideal = sum(1.0 / np.log2(r + 2) for r in range(min(len(pos), 10)))
-            ndcg.append(sum(gains) / ideal)
+            ndcg = float(sum(gains) / ideal)
+        out["qid"].append(str(rel["qid"]))
+        out["pair_hits"].append(hits)
+        out["pairs"].append(len(pos) * len(neg))
+        out["ndcg@10"].append(ndcg)
+    return out
+
+
+def coquir_scores(
+    sims: np.ndarray, query_ids: list[str], corpus_ids: list[str], qrels: list[dict[str, Any]]
+) -> dict[str, float]:
+    return coquir_summary(coquir_outcomes(sims, query_ids, corpus_ids, qrels))
+
+
+def coquir_summary(outcomes: dict[str, list[Any]]) -> dict[str, float]:
+    pairs = sum(outcomes["pairs"])
+    ndcg = [x for x in outcomes["ndcg@10"] if x is not None]
     return {
-        "pairwise": pair_hits / pairs if pairs else float("nan"),
+        "pairwise": sum(outcomes["pair_hits"]) / pairs if pairs else float("nan"),
         "ndcg@10": float(np.mean(ndcg)) if ndcg else float("nan"),
     }
 
@@ -132,17 +154,20 @@ def evaluate(
 ) -> dict[str, Any]:
     """``max_seq_length`` is applied to every model so base and candidate see the same text; a
     checkpoint's own (training) length otherwise cuts long code: 86/465 Defects4J pairs are identical
-    at 256 tokens."""
+    at 256 tokens. ``per_query`` holds each benchmark's per-query outcomes for paired significance tests
+    (``significance.compare``)."""
     if max_seq_length is not None:
         model.max_seq_length = max_seq_length
     queries, corpus = load_exec_retrieval()
     corpus_ids = list(corpus)
     q = _encode(model, [x["query"] for x in queries], True, batch_size)
     d = _encode(model, [corpus[c] for c in corpus_ids], False, batch_size)
+    exec_outcomes = exec_retrieval_outcomes(q @ d.T, corpus_ids, queries)
     results: dict[str, Any] = {
         "max_seq_length": model.max_seq_length,
-        "ExecRetrieval": exec_retrieval_scores(q @ d.T, corpus_ids, queries),
+        "ExecRetrieval": {k: sum(v) / len(v) for k, v in exec_outcomes.items()},
     }
+    per_query: dict[str, Any] = {"ExecRetrieval": exec_outcomes}
     for subset in subsets:
         qs, cs, qrels = load_coquir(subset)
         qids, cids = list(qs), list(cs)
@@ -151,9 +176,10 @@ def evaluate(
             _encode(model, [qs[i] for i in qids], True, batch_size, prompt_name=prompt)
             @ _encode(model, [cs[i] for i in cids], False, batch_size, prompt_name=prompt).T
         )
-        results[f"CoQuIR-{subset}"] = coquir_scores(sims, qids, cids, qrels)
+        per_query[f"CoQuIR-{subset}"] = coquir_outcomes(sims, qids, cids, qrels)
+        results[f"CoQuIR-{subset}"] = coquir_summary(per_query[f"CoQuIR-{subset}"])
     logger.info("behaviour eval: %s", results)
-    return results
+    return {**results, "per_query": per_query}
 
 
 def mteb_code_mean(results_dir: Path) -> float:

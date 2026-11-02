@@ -511,3 +511,115 @@ def test_eval_scores_every_model_at_one_length(monkeypatch: pytest.MonkeyPatch) 
     assert (
         behaviour_eval.evaluate(Model(), subsets=("Defects4J",), max_seq_length=None)["max_seq_length"] == 256
     )
+
+
+def test_per_query_outcomes_add_up_to_the_scores() -> None:
+    sims = np.array([[0.9, 0.8, 0.2], [0.3, 0.7, 0.1]])
+    queries = [
+        {"query": "q1", "correct_corpus_ids": ["d0"], "paired_distractor_corpus_ids": ["d1"]},
+        {"query": "q2", "correct_corpus_ids": ["d0"], "paired_distractor_corpus_ids": ["d1"]},
+    ]
+    outcomes = behaviour_eval.exec_retrieval_outcomes(sims, ["d0", "d1", "d2"], queries)
+    assert outcomes == {"exec@1": [1, 0], "exec@10": [1, 1], "beats_paired_distractors": [1, 0]}
+
+    qrels = [
+        {"qid": "q1", "pos-docids": ["d0"], "neg-docids": ["d1", "d2"]},
+        {"qid": "q2", "pos-docids": ["d0"], "neg-docids": ["d1", "d2"]},
+        {"qid": "q3", "pos-docids": ["d0"], "neg-docids": ["d1"]},  # not scored: no such query
+        {"qid": "q2", "pos-docids": [], "neg-docids": ["d1"]},
+    ]
+    cq = behaviour_eval.coquir_outcomes(sims, ["q1", "q2"], ["d0", "d1", "d2"], qrels)
+    assert cq["qid"] == ["q1", "q2", "q2"]
+    assert cq["pair_hits"] == [2, 1, 0]
+    assert cq["pairs"] == [2, 2, 0]
+    assert cq["ndcg@10"][2] is None
+    assert (
+        behaviour_eval.coquir_summary(cq)["pairwise"]
+        == behaviour_eval.coquir_scores(sims, ["q1", "q2"], ["d0", "d1", "d2"], qrels)["pairwise"]
+        == pytest.approx(0.75)
+    )
+
+
+def test_mcnemar_exact_matches_the_binomial_tail() -> None:
+    from code_embed_v3.eval.significance import mcnemar_exact
+
+    assert mcnemar_exact(0, 0) == 1.0
+    assert mcnemar_exact(5, 0) == pytest.approx(2 / 32)
+    assert mcnemar_exact(10, 2) == pytest.approx(2 * (1 + 12 + 66) / 4096)
+    assert mcnemar_exact(3, 3) == 1.0
+
+
+def _per_query(exec1: list[int], hits: list[int]) -> dict[str, Any]:
+    return {
+        "per_query": {
+            "ExecRetrieval": {"exec@1": exec1, "exec@10": exec1, "beats_paired_distractors": exec1},
+            "CoQuIR-X": {
+                "qid": [str(i) for i in range(len(hits))],
+                "pair_hits": hits,
+                "pairs": [1] * len(hits),
+                "ndcg@10": [float(h) for h in hits],
+            },
+        }
+    }
+
+
+def test_compare_finds_a_real_gain_and_not_a_null_one() -> None:
+    from code_embed_v3.eval.significance import compare
+
+    rng = np.random.default_rng(0)
+    base_exec = rng.integers(0, 2, 400).tolist()
+    base_hits = rng.integers(0, 2, 400).tolist()
+    same = {
+        r.metric: r
+        for r in compare(_per_query(base_exec, base_hits), _per_query(base_exec, base_hits), n_boot=500)
+    }
+    assert same["ExecRetrieval exec@1"].diff == 0
+    assert same["ExecRetrieval exec@1"].p_mcnemar == 1.0
+    assert same["CoQuIR-X pairwise"].p_bootstrap == 1.0
+
+    better_exec = [1 if i % 2 == 0 else x for i, x in enumerate(base_exec)]  # flips ~100 losses to wins
+    better_hits = [1] * 400
+    rows = {
+        r.metric: r
+        for r in compare(_per_query(base_exec, base_hits), _per_query(better_exec, better_hits), n_boot=500)
+    }
+    gain = rows["ExecRetrieval exec@1"]
+    assert gain.losses == 0 and gain.wins > 50
+    assert gain.p_mcnemar < 1e-10 and gain.p_bootstrap < 0.01 and gain.ci_low > 0
+    assert rows["CoQuIR-X pairwise"].ci_low > 0
+    assert rows["CoQuIR pairwise mean"].diff == pytest.approx(rows["CoQuIR-X pairwise"].diff)
+
+
+def test_compare_refuses_runs_that_scored_different_queries() -> None:
+    from code_embed_v3.eval.significance import compare
+
+    other = _per_query([1, 0], [1, 0])
+    other["per_query"]["CoQuIR-X"]["qid"] = ["a", "b"]
+    with pytest.raises(ValueError, match="different queries"):
+        compare(_per_query([1, 0], [1, 0]), other, n_boot=10)
+
+
+def test_behaviour_eval_returns_per_query_outcomes(monkeypatch: pytest.MonkeyPatch) -> None:
+    queries = [{"query": "q", "correct_corpus_ids": ["c1"], "paired_distractor_corpus_ids": ["c2"]}]
+    monkeypatch.setattr(behaviour_eval, "load_exec_retrieval", lambda: (queries, {"c1": "a", "c2": "b"}))
+    monkeypatch.setattr(
+        behaviour_eval,
+        "load_coquir",
+        lambda _: (
+            {"q": "q"},
+            {"g": "good", "b": "bad"},
+            [{"qid": "q", "pos-docids": ["g"], "neg-docids": ["b"]}],
+        ),
+    )
+
+    class Model:
+        def __init__(self) -> None:
+            self.prompts: dict[str, str] = {}
+            self.max_seq_length = 8192
+
+        def encode(self, texts: list[str], **_: Any) -> np.ndarray:
+            return np.eye(len(texts), 4)
+
+    out = behaviour_eval.evaluate(Model(), subsets=("Defects4J",))
+    assert out["per_query"]["ExecRetrieval"]["exec@1"] == [int(out["ExecRetrieval"]["exec@1"])]
+    assert out["per_query"]["CoQuIR-Defects4J"]["qid"] == ["q"]

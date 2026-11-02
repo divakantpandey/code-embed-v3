@@ -452,7 +452,30 @@ def _cmd_behaviour_eval(a: argparse.Namespace) -> None:
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"model": a.model, **results}, indent=2))
-    print(json.dumps(results, indent=2))
+    print(json.dumps({k: v for k, v in results.items() if k != "per_query"}, indent=2))
+
+
+def _cmd_behaviour_compare(a: argparse.Namespace) -> None:
+    from dataclasses import asdict
+
+    from code_embed_v3.eval.significance import compare
+
+    rows = compare(
+        json.loads(Path(a.baseline).read_text()), json.loads(Path(a.candidate).read_text()), n_boot=a.n_boot
+    )
+    print(
+        f"{'metric':38s} {'base':>7s} {'cand':>7s} {'diff':>8s} {'95% CI':>19s} {'p_boot':>7s} {'p_mcn':>7s}"
+    )
+    for r in rows:
+        mcn = f"{r.p_mcnemar:7.4f}" if r.p_mcnemar is not None else ""
+        print(
+            f"{r.metric:38s} {r.baseline:7.4f} {r.candidate:7.4f} {r.diff:+8.4f} "
+            f"[{r.ci_low:+.4f}, {r.ci_high:+.4f}] {r.p_bootstrap:7.4f} {mcn}"
+        )
+    if a.out:
+        out = Path(a.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps([{**asdict(r), "diff": r.diff} for r in rows], indent=2))
 
 
 def _cmd_pilot_gate(a: argparse.Namespace) -> None:
@@ -807,6 +830,15 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--batch-size", type=int, default=64)
     s.add_argument("--max-seq-length", type=int, default=8192, help="applied to every model; 0 keeps its own")
     s.set_defaults(fn=_cmd_behaviour_eval)
+
+    s = sub.add_parser(
+        "behaviour-compare", help="paired significance of a candidate's behaviour-eval against a baseline's"
+    )
+    s.add_argument("--baseline", required=True, help="behaviour-eval JSON with per_query outcomes")
+    s.add_argument("--candidate", required=True)
+    s.add_argument("--n-boot", type=int, default=10_000)
+    s.add_argument("--out", help="also write the comparison as JSON")
+    s.set_defaults(fn=_cmd_behaviour_compare)
 
     s = sub.add_parser(
         "pilot-gate", help="go/no-go: exec@1 gain, MTEB(Code) and CoQuIR drop against a baseline"
