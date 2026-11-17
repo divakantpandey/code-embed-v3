@@ -1,15 +1,47 @@
-# EXAMPLE mix: enough to run the pipeline end to end. The mix behind the released model is private
-# (private/configs/data/mix_v1.yaml overrides this file; see src/code_embed_v3/paths.py).
-# Every source here is zero-shot: none shares provenance with an MTEB(Code)/CoIR/CoREB task.
+# Zero-shot pair mix: no source shares provenance with any MTEB(Code, v1) / CoIR / CoREB(v1) task, so
+# mteb reports 100% zero-shot. Sources that do overlap live in eval_overlap.yaml (opt-in). `ce3 audit`
+# still removes exact and near-duplicate test rows, because CoRNStack and others are scraped from
+# GitHub and can contain benchmark code without sharing its provenance.
+# techqa, multiturn and most code_edit coverage come from configs/data/synth_v1.yaml (`make synth`).
+# Schemas checked on the Hub 2026-10-29.
 output_dir: data/mix_v1
 seed: 42
 dev_rows: 500
 sources:
-  - {name: cornstack_python, loader: cornstack, family: nl2code, license: apache-2.0, hf_id: nomic-ai/cornstack-python-v1, max_rows: 200000}
-  - {name: cornstack_python_c2t, loader: cornstack, family: code2nl, license: apache-2.0, hf_id: nomic-ai/cornstack-python-v1, max_rows: 50000, options: {reverse: true}}
+  # --- nl2code: CoRNStack (Apache-2.0), consistency-filtered from The Stack v2
+  - {name: cornstack_python, loader: cornstack, family: nl2code, license: apache-2.0, hf_id: nomic-ai/cornstack-python-v1, max_rows: 3000000}
+  - {name: cornstack_java, loader: cornstack, family: nl2code, license: apache-2.0, hf_id: nomic-ai/cornstack-java-v1, max_rows: 2000000}
+  - {name: cornstack_javascript, loader: cornstack, family: nl2code, license: apache-2.0, hf_id: nomic-ai/cornstack-javascript-v1, max_rows: 2000000}
+  - {name: cornstack_go, loader: cornstack, family: nl2code, license: apache-2.0, hf_id: nomic-ai/cornstack-go-v1, max_rows: 1500000}
+  - {name: cornstack_php, loader: cornstack, family: nl2code, license: apache-2.0, hf_id: nomic-ai/cornstack-php-v1, max_rows: 1500000}
+  - {name: cornstack_ruby, loader: cornstack, family: nl2code, license: apache-2.0, hf_id: nomic-ai/cornstack-ruby-v1, max_rows: 1000000}
+
+  # --- code2nl: CoRNStack pairs reversed (code -> its description), replacing CodeSearchNet code2nl.
+  - {name: cornstack_python_c2t, loader: cornstack, family: code2nl, license: apache-2.0, hf_id: nomic-ai/cornstack-python-v1, max_rows: 500000, options: {reverse: true}}
+  - {name: cornstack_java_c2t, loader: cornstack, family: code2nl, license: apache-2.0, hf_id: nomic-ai/cornstack-java-v1, max_rows: 300000, options: {reverse: true}}
+  - {name: cornstack_javascript_c2t, loader: cornstack, family: code2nl, license: apache-2.0, hf_id: nomic-ai/cornstack-javascript-v1, max_rows: 300000, options: {reverse: true}}
+
+  # --- code2code: same problem, different language
+  - name: code_contests_xlang
+    loader: code_contests_xlang
+    family: code2code
+    license: cc-by-4.0
+    hf_id: deepmind/code_contests
+    options: {pairs_per_problem: 4}
+
+  # --- issue -> fixing patch (repo-level search; the "super useful" axis beyond the leaderboard).
+  # SWE-smith's `patch` injects the bug; the `swe_smith` loader reverses it into the fix.
+  - name: swe_smith
+    loader: swe_smith
+    family: code_edit
+    license: mit
+    hf_id: SWE-bench/SWE-smith
+
+  # --- text2sql
   - name: spider
     loader: columns
     family: text2sql
     license: cc-by-sa-4.0
     hf_id: xlangai/spider
     options: {anchor: question, positive: query}
+

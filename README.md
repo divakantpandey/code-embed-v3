@@ -1,19 +1,26 @@
 # code-embed-v3
 
-A compact (150M) embedding model for code search, and the toolkit that trains it: natural language to code, code to description, code to code, programming Q&A, text to SQL, code changes and multi-turn developer conversations. 768-dimensional Matryoshka embeddings (truncatable to 64), 8k context, runs on CPU.
+A toolkit for training compact code embedding models, and the full record of one research question asked with it: does fine-tuning on execution-verified near-miss code (single-edit buggy copies and passing rewrites) teach an embedder to rank working code above code that only looks right?
 
-## Usage
+**Status: negative result, no model released.** Starting from GTE-ModernBERT-base (149M), near-miss data beat a replay-only control on ExecRetrieval exec@1 on every seed in small runs (+0.029 ± 0.010), but at pilot scale the gain over the base model was not significant (McNemar p = 0.45) and MTEB(Code, v1) dropped from 71.78 to 66.29. Every experiment, number and dead end is in [docs/RESEARCH_LOG.md](docs/RESEARCH_LOG.md).
 
-```python
-from sentence_transformers import SentenceTransformer
+| Model | ExecRetrieval exec@1 | CoQuIR pairwise | MTEB(Code, v1) |
+|---|---|---|---|
+| GTE-ModernBERT-base | 0.0884 | 0.5523 | 71.78 |
+| Pilot fine-tune (11% near-miss data) | 0.0990 | 0.5530 | 66.29 |
+| 50/50 weight average of the two | 0.1022 | 0.5556 | 70.82 |
 
-model = SentenceTransformer("divakantpandey/code-embed-v3")
-q = model.encode(["retry an http request with exponential backoff"], prompt_name="nl2code")
-d = model.encode([open("client.py").read()])  # documents never take a prompt
-print(model.similarity(q, d))
-```
+## What is in this repo
 
-Query prompt names: `nl2code`, `code2nl`, `code2code`, `techqa`, `text2sql`, `code_edit`, `multiturn` (see `src/code_embed_v3/prompts.py`). One document index serves every task.
+| Path | Contents |
+|---|---|
+| `src/code_embed_v3/` | The `ce3` toolkit: data building, contamination audit, near-miss construction, mining, training, evaluation |
+| `configs/` | The exact data mix, stage hyperparameters, search space and generation prompts used in the experiments |
+| `docs/RESEARCH_LOG.md` | Every experiment in order: procedure, results, what worked and what did not |
+| `docs/PLAN.md`, `docs/RUNPOD.md`, `docs/DRYRUN_FINDINGS.md` | Strategy, GPU runbook and dry-run findings |
+| `experiments/` | The drivers that ran each round on rented GPUs (`ablate*.py`, `bridge.py`, `pilot.py`, `merge.py`, `control.py`) |
+
+The drivers read and write private Hugging Face repos under `divakantpandey/`. To rerun them, point `REPO`, `DATA_REPO` and the model repos at your own namespace.
 
 ## Zero-shot by construction
 
@@ -39,9 +46,9 @@ mteb flags a model by provenance: if any declared training dataset is an evaluat
 
 `make check` runs ruff, mypy and the offline tests (tiny random models, no downloads).
 
-## Public examples, private recipe
+## Your own recipe
 
-`configs/` holds working example configs and prompts. The data mix, hyperparameters and generation prompts behind the released model live in a separate private checkout at `private/`, which overrides any file at the same relative path (`src/code_embed_v3/paths.py`). Without it, every command runs on the examples.
+`configs/` is the recipe used for the experiments. To try your own without editing it, put files at the same relative paths under `private/` (gitignored) or under `$CE3_PRIVATE`; they override `configs/` wherever they exist (`src/code_embed_v3/paths.py`).
 
 ## License
 

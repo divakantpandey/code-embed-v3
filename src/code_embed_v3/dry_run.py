@@ -348,7 +348,7 @@ class DryRun:
             "--repeats",
             "1",
             # The 5,000-row default would make twins ~60% of a 300-rows-per-source mix (vs ~1% in the
-            # pilot), and at that share they collapse even a plain recipe (private/docs/RESEARCH_LOG.md).
+            # pilot), and at that share they collapse even a plain recipe (docs/RESEARCH_LOG.md).
             "--swe-smith-rows",
             str(self.rows),
             "--push-repo",

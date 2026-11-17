@@ -1,4 +1,3 @@
-# EXAMPLE synthetic sources (private/configs/data/synth_v1.yaml overrides this file).
 # Synthetic pairs written by Qwen2.5-Coder-7B-Instruct (Apache-2.0) for CoRNStack code (Apache-2.0); see
 # `make synth`. The code side is always real; only the query side is generated. Built into the same
 # data/mix_v1 directory so `ce3 audit` checks these rows against the benchmarks like every other source.

@@ -1,8 +1,8 @@
-"""Public/private config overlay.
+"""Local config overlay.
 
-The public repo ships example configs. A private checkout at ``private/`` (or ``$CE3_PRIVATE``) holds
-the real data mix, tuned hyperparameters and generation prompts under the same relative paths, and
-wins wherever it has a file. Nothing in ``private/`` is ever committed to the public repo.
+``configs/`` holds the recipe used for the pilot. A checkout at ``private/`` (or ``$CE3_PRIVATE``) can hold
+your own data mix, hyperparameters or prompts under the same relative paths and wins wherever it has a file.
+``private/`` is gitignored.
 """
 
 from __future__ import annotations

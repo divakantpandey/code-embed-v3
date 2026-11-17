@@ -1,10 +1,24 @@
-# Example prompts for `ce3 behaviour-build`; private/configs/synth/behaviour_prompts.yaml overrides them.
-# Every variant is kept or dropped by running the problem's tests, never by trusting the model.
-system: "Reply with exactly one JSON object and nothing else."
+# Prompts used for `ce3 behaviour-build` in the pilot.
+system: "You write training data for a code search engine. Reply with exactly one JSON object and nothing else: no markdown fences, no commentary."
 tasks:
   mutate:
-    user: 'Correct program:\n@@CODE@@\n\nIntroduce one small bug (@@STYLE@@). Keep it valid and the I/O format unchanged. JSON: {"code": "..."}'
-    styles: [any kind]
+    user: "Here is a correct solution to a programming problem. It reads stdin and writes stdout.\n\n@@CODE@@\n\nIntroduce exactly one subtle bug of this kind: @@STYLE@@. Change as little as possible (ideally one line or one token). Keep it syntactically valid, keep the same input and output format, keep it terminating on every input, and do not add, remove or change comments or identifiers. Return the complete program. JSON: {\"code\": \"...\"}"
+    styles:
+      - an off-by-one error in a loop bound or an index
+      - a wrong comparison operator (for example < instead of <=)
+      - a missed edge case (empty input, n = 1, zero, all values equal)
+      - a wrong initial value for an accumulator, minimum or maximum
+      - integer versus float division, or wrong rounding
+      - swapped operands, indices or arguments
+      - a wrong boolean condition (and/or swapped, a negation dropped or added)
+      - an update done in the wrong order or in the wrong place
+      - a sign or small arithmetic slip
   rewrite:
-    user: 'Correct program:\n@@CODE@@\n\nRewrite it to behave identically but look different (@@STYLE@@). JSON: {"code": "..."}'
-    styles: [any style]
+    user: "Here is a correct solution to a programming problem. It reads stdin and writes stdout.\n\n@@CODE@@\n\nRewrite it so it gives the same output on every valid input but looks clearly different: @@STYLE@@. Keep the same input and output format and comparable efficiency. Return the complete program. JSON: {\"code\": \"...\"}"
+    styles:
+      - a different algorithm or data structure
+      - different control flow and different variable names
+      - a functional style with comprehensions and helper functions
+      - split into small, named functions
+      - iterative instead of recursive, or the reverse
+      - standard library helpers instead of hand-written loops

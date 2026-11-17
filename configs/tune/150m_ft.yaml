@@ -1,15 +1,16 @@
-# EXAMPLE search space (the released model's search space and results are private).
 # Optuna search for option A (`make tune`). Each trial is a proxy run on the same 50k samples,
 # scored on the dev suite (macro nDCG@10 over task families), never on MTEB.
 # Rough cost: ~1 h of one 4090 per trial; 32 trials + 6 confirm runs on 4x 4090 ~ 10 h, USD ~13.
 study: ce3-150m-ft-v1
+output_dir: private/tune   # best_stage.yaml and the study journal stay in the private repo
 base_stage: configs/stages/150m_ft_minimal.yaml
 samples_per_trial: 50000
 evals_per_trial: 4
-n_trials: 8
+n_trials: 32
 confirm_top: 3
 confirm_seeds: [1, 2]
 min_delta: 0.002
+storage_repo: divakantpandey/code-embed-v3-data
 params:
   learning_rate: {type: float, low: 5.0e-6, high: 1.0e-4, log: true}
   temperature: {type: float, low: 0.01, high: 0.05, log: true}

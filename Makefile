@@ -2,7 +2,7 @@
 
 # Every step below skips work already done locally or on the Hub, so after a lost pod
 # `make pull-data s1 s2 s3 s4` picks up where it stopped.
-# private/<path> overrides the public example at <path> (src/code_embed_v3/paths.py).
+# private/<path>, if present, overrides <path> (src/code_embed_v3/paths.py).
 cfg = $(if $(wildcard private/$(1)),private/$(1),$(1))
 DATA_REPO ?= divakantpandey/code-embed-v3-data
 MODEL_REPO ?= divakantpandey/code-embed-v3

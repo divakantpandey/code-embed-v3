@@ -1,4 +1,3 @@
-# EXAMPLE starting values; tuned hyperparameters for released models are private.
 # Stage 4: short long-context phase so whole files (2k-8k tokens) embed well.
 name: ce3-150m-s4
 model: configs/models/modernbert-150m.yaml

@@ -1,4 +1,3 @@
-# EXAMPLE starting values; tuned hyperparameters for released models are private.
 # Stage 2: fine-tune on mined hard negatives (`ce3 mine data/mix_v1 --model runs/150m/s1/final ...`).
 name: ce3-150m-s2
 model: configs/models/modernbert-150m.yaml

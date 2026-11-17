@@ -1,17 +1,57 @@
-# Example generation prompts. They work, but the prompts behind the released model are private
-# (see paths.py): drop a file at private/configs/synth/prompts.yaml to override this one.
-# @@CODE@@ is the seed snippet; @@STYLE@@ is filled with one of `styles` per row.
-system: "Reply with exactly one JSON object and nothing else."
+# Generation prompts used for the pilot. @@CODE@@ and @@STYLE@@ are filled per seed snippet.
+system: "You write training data for a code search engine. Reply with exactly one JSON object\
+  \ and nothing else: no markdown fences, no commentary."
 tasks:
   nl2code:
-    user: 'Code:\n@@CODE@@\n\nWrite a search query a developer would type to find this code, as @@STYLE@@. JSON: {"query": "..."}'
-    styles: [a short question]
+    user: 'Code:
+
+      @@CODE@@
+
+
+      Write one search query that a developer who needs this code would type, as @@STYLE@@. Do not copy identifiers or docstring text verbatim unless a developer naturally would. JSON: {"query": "..."}'
+    styles:
+    - a few keywords
+    - a natural-language question
+    - a description of a bug or symptom this code fixes or avoids
+    - a 'how do I ...' question
+    - a description of the feature they are building
+    - a short request a developer would ask a colleague
   techqa:
-    user: 'Code:\n@@CODE@@\n\nWrite a programming question this code answers (@@STYLE@@) and an answer that includes the code. JSON: {"question": "...", "answer": "..."}'
-    styles: [from a developer]
+    user: 'Code:
+
+      @@CODE@@
+
+
+      Write a Stack Overflow-style question (title and body, @@STYLE@@) whose best answer uses this code, without pasting the code into the question. Then write that answer: a short explanation followed by the code. JSON: {"question": "...", "answer": "..."}'
+    styles:
+    - from a beginner
+    - from an experienced developer
+    - describing an error message they hit
+    - asking about performance
+    - asking for the idiomatic way
   code_edit:
-    user: 'Code:\n@@CODE@@\n\nPropose @@STYLE@@ to this code as a commit message and give the complete new code. JSON: {"request": "...", "new_code": "..."}'
-    styles: [one small change]
+    user: 'Code:
+
+      @@CODE@@
+
+
+      Propose one realistic, small change to this code: @@STYLE@@. Write the request as a commit message and give the complete modified code. JSON: {"request": "...", "new_code": "..."}'
+    styles:
+    - a bug fix
+    - a small feature
+    - a refactor for readability
+    - better error handling
+    - a performance improvement
+    - an API or signature change
   multiturn:
-    user: 'Code:\n@@CODE@@\n\nWrite a user/assistant conversation, @@STYLE@@, with 3 turns that starts and ends with the user, ending with the user asking for exactly what this code does. JSON: {"turns": [{"role": "user", "content": "..."}]}'
-    styles: [about a small task]
+    user: 'Code:
+
+      @@CODE@@
+
+
+      Write a short conversation between a developer (user) and an assistant, @@STYLE@@. It must alternate user/assistant, start and end with the user, have 3 to 7 turns, and end with the user asking for exactly what this code does. Do not include the code. JSON: {"turns": [{"role": "user", "content": "..."}, ...]}'
+    styles:
+    - that narrows down a vague first request
+    - where the first attempt had a bug
+    - that changes requirements midway
+    - about integrating this into a larger project
