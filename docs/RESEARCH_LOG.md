@@ -3,8 +3,11 @@
 Running record of every investigation step: what was tried, what changed, what worked, what did not.
 Newest entry last. "Measured" = read from eval JSON / logs this session. "Hypothesis" = not tested yet.
 
-## Current status (2026-10-30, latest)
+## Current status (2026-11-17, latest)
 
+- **R16 (2026-11-17): the pilot-scale control is in. Closed as a negative result.** Near-miss data adds +1.4 points
+  exec@1 over a replay-only control (p 0.21) and causes the AppsRetrieval collapse (control 53.9, pilot 18.9);
+  replay fine-tuning alone costs ~2 MTEB(Code) points. No model released.
 - **ROOT CAUSE FOUND (R6): the model trained with float16 master weights.** GTE-ModernBERT's checkpoint is
   float16, transformers 5 loads the checkpoint dtype by default, and `build_model` passed no dtype, so all
   134 trainable tensors were fp16. `bf16: true` only sets autocast; AdamW then ran on fp16 weights (eps 1e-8
@@ -915,6 +918,64 @@ Paired per query: McNemar exact on ExecRetrieval, 10k bootstrap resamples of que
   Not released. v4 has to change the training data or objective, not the merge ratio.
 
 
+## R16. Pilot-scale replay-only control (2026-11-17, Vast.ai 2x A100 40 GB, ~5.5 h incl. idle, results `pilot/pilot-1-control/`)
+
+**Why.** The pilot's control arm died with its host on 2026-11-01, so the MTEB(Code) loss could not be attributed to
+the near-miss data versus fine-tuning on the replay mix itself.
+
+**Procedure** (`experiments/control.py`). Rebuilt the pilot's combined mix from Hub copies (mined replay +
+behaviour data, re-audited) and refused to train unless every source's row count matched the pilot's
+`status.json`: all 15 matched, 213,648 replay rows. Control = the same replay rows and recipe (batch 16, prod
+recipe), resumed from its Hub checkpoint at step 2,000 and trained to 13,346 (1.91 it/s). Base, pilot fine-tune and
+control were all re-scored on the same box (float32, 8,192 tokens); MTEB(Code) for the pilot and the control both
+on the same A100s in fp16. `behaviour-compare` for every pair. The control's behaviour eval ran at batch 8 instead
+of 32 (shared GPU); batch size does not change per-item scores beyond float rounding.
+
+| Model (same box) | exec@1 | exec@10 | beats_paired | CoQuIR pairwise mean | MTEB(Code, v1) |
+|---|---|---|---|---|---|
+| base GTE | 0.0927 | 0.9681 | 0.0990 | 0.5528 | 71.78 (A40) |
+| replay-only control | 0.0852 | 0.9755 | 0.0905 | 0.5588 | 69.75 |
+| pilot (11% near-miss) | 0.0990 | 0.9723 | 0.1054 | 0.5527 | 66.02 (66.29 on the A40) |
+
+Paired tests (bootstrap 10k over queries; McNemar on ExecRetrieval):
+
+| Comparison | exec@1 diff (p) | beats_paired diff (p) | CoQuIR pairwise mean diff (p) |
+|---|---|---|---|
+| pilot vs control (effect of near-miss data) | +0.0138 (0.21) | +0.0149 (0.18) | -0.0061 (0.043) |
+| control vs base (effect of replay fine-tuning) | -0.0075 (0.59) | -0.0085 (0.54) | +0.0060 (0.16) |
+| pilot vs base | +0.0064 (0.67) | +0.0064 (0.69) | -0.0001 (0.98) |
+
+MTEB(Code) per task, the ones that move (A100, fp16):
+
+| Task | base | control | pilot | pilot - control |
+|---|---|---|---|---|
+| AppsRetrieval | 57.67 | 53.89 | 18.87 | **-35.02** |
+| CodeTransOceanContest | 72.38 | 80.97 | 75.37 | -5.60 |
+| CodeSearchNetCCRetrieval | 93.38 | 77.06 | 74.42 | -2.64 |
+| CodeEditSearchRetrieval | 56.08 | 63.64 | 63.15 | -0.49 |
+| CodeFeedbackMT | 86.17 | 78.61 | 79.38 | +0.77 |
+| other 7 tasks | | | | -1.1 to +0.2 |
+
+**Findings.**
+- **The AppsRetrieval collapse is caused by the near-miss data**: the control keeps 53.9, the pilot falls to 18.9.
+  Apps pairs contest problems with solutions, the domain of the contest twins: learning to push away near-identical
+  solutions to the same problem breaks problem-to-solution matching.
+- **Replay fine-tuning itself costs ~2 MTEB points** (71.78 -> 69.75), almost all on CodeSearchNetCC (-16.3), offset
+  by gains on CodeTransOceanContest (+8.6) and CodeEditSearch (+7.6). Of the pilot's 5.8-point loss, ~2.0 comes from
+  fine-tuning on the replay mix and ~3.7 from the near-miss data.
+- **Near-miss data adds +1.4 points exec@1 over the control, not significant (p 0.21)**, same direction as the
+  small-scale seeds (+2.9). The replay control alone sits slightly below base on exec@1. CoQuIR goes the other way:
+  the control is better than the pilot (p 0.043), mostly on CodeNet.
+- Hardware: the pilot's MTEB(Code) moved 66.29 (A40) -> 66.02 (A100); base exec@1 0.0927 here, as on the earlier A100.
+- **Conclusion for v3:** near-miss data as contrastive negatives gives a small, non-significant gain on the target
+  metric and a large, specific loss on problem-to-solution retrieval. Closed as a negative result.
+
+**Cost and ops.** Vast.ai 2x A100 40 GB at $1.21/h (RunPod had no 48 GB stock). About 2 h of the bill were an idle
+box after a failed first launch (tarball excluded `src/code_embed_v3/data`), and the GPUs were under-used (training at
+batch 16 used ~40% of one GPU, 8 GB): one 48 GB card with evals packed alongside training would have been cheaper.
+The final Hub push hit the account's private storage limit; old dry-run repos were deleted and the model pushed to
+`code-embed-v3-150m-ft-control/final`.
+
 ---
 
 ## Code changes so far (committed in `2014373`)
@@ -959,6 +1020,8 @@ MTEB(Code) drop limit), docs cost numbers (4090 is back at $0.34/h with low stoc
 | 13 | Behaviour data improves target metrics (pilot premise) | **Supported, grows with scale** (R8 10x: exec@1 +0.033, beats_paired +0.034 vs replay under prod; first exec@1 above base, 0.111 vs 0.097; 1 seed). Far below the absolute +0.10 gate |
 | 14 | Base merging recovers robustness | **No at scale** (R8: lowers exec@1 0.111 -> 0.088); only helped in R7 when fine-tunes were below base; never restores D4J pairwise |
 | 15 | Prod recipe (tau 0.015, hardness 5) is what makes behaviour data work (new) | Supported (R8: alone it does nothing, with behaviour data it triples the gain; 1 seed) |
+| 16 | Near-miss data causes the MTEB(Code) loss (pilot) | **Partly** (R16): it causes the AppsRetrieval collapse (-35 vs control); replay fine-tuning alone costs ~2 points |
+| 17 | Near-miss data improves exec@1 at pilot scale | **Not significant** (R16: +0.014 vs control, p 0.21; small-scale seeds +0.029) |
 
 Note: rows 1-4 and 8 were judged on fp16-broken runs; their "contributes" verdicts only describe how fast
 the bug destroyed the model. Re-test after the fix before using them for the recipe.

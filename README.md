@@ -2,13 +2,15 @@
 
 A toolkit for training compact code embedding models, and the full record of one research question asked with it: does fine-tuning on execution-verified near-miss code (single-edit buggy copies and passing rewrites) teach an embedder to rank working code above code that only looks right?
 
-**Status: negative result, no model released.** Starting from GTE-ModernBERT-base (149M), near-miss data beat a replay-only control on ExecRetrieval exec@1 on every seed in small runs (+0.029 ± 0.010), but at pilot scale the gain over the base model was not significant (McNemar p = 0.45) and MTEB(Code, v1) dropped from 71.78 to 66.29. Every experiment, number and dead end is in [docs/RESEARCH_LOG.md](docs/RESEARCH_LOG.md).
+**Status: negative result, no model released.** Starting from GTE-ModernBERT-base (149M), near-miss data beat a replay-only control on ExecRetrieval exec@1 on every seed in small runs (+0.029 ± 0.010). At pilot scale it adds +0.014 over the same control, which is not significant (p = 0.21), and it alone collapses AppsRetrieval from 53.9 to 18.9. Fine-tuning on the replay mix by itself costs about 2 MTEB(Code) points. Every experiment, number and dead end is in [docs/RESEARCH_LOG.md](docs/RESEARCH_LOG.md).
+
+Behaviour evals for all three on one machine (float32, 8,192 tokens); MTEB in fp16, control and pilot on that machine, base from the original pilot run:
 
 | Model | ExecRetrieval exec@1 | CoQuIR pairwise | MTEB(Code, v1) |
 |---|---|---|---|
-| GTE-ModernBERT-base | 0.0884 | 0.5523 | 71.78 |
-| Pilot fine-tune (11% near-miss data) | 0.0990 | 0.5530 | 66.29 |
-| 50/50 weight average of the two | 0.1022 | 0.5556 | 70.82 |
+| GTE-ModernBERT-base | 0.0927 | 0.5528 | 71.78 |
+| Replay-only control | 0.0852 | 0.5588 | 69.75 |
+| Pilot fine-tune (11% near-miss data) | 0.0990 | 0.5527 | 66.02 |
 
 ## What is in this repo
 
