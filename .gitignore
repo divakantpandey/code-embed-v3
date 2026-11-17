@@ -26,3 +26,6 @@ build/
 
 # private overlay: its own git repo (real data mix, tuned hyperparameters, prompts, strategy docs)
 /private/
+
+# personal research write-ups and submission bundles
+/research/
